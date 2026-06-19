@@ -1,0 +1,251 @@
+"""Config flow for Home Daily Report."""
+
+from __future__ import annotations
+
+import re
+from typing import Any
+
+import voluptuous as vol
+
+from homeassistant import config_entries
+from homeassistant.core import callback
+from homeassistant.helpers import config_validation as cv, selector
+
+from .const import (
+    CONF_AI_TASK_ENTITY_ID,
+    CONF_ENABLE_AI_SUMMARY,
+    CONF_EXCLUDED_ENTITY_GLOBS,
+    CONF_INCLUDED_DEVICE_IDS,
+    CONF_INCLUDED_DOMAINS,
+    CONF_INCLUDED_ENTITY_IDS,
+    CONF_MAX_DAYS,
+    CONF_NOTIFY_SERVICE,
+    CONF_REPORT_TIME,
+    DEFAULT_ENABLE_AI_SUMMARY,
+    DEFAULT_INCLUDED_DOMAINS,
+    DEFAULT_MAX_DAYS,
+    DEFAULT_NOTIFY_SERVICE,
+    DEFAULT_REPORT_TIME,
+    DOMAIN,
+    NAME,
+)
+
+TIME_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
+
+DOMAIN_OPTIONS = [
+    "sensor",
+    "binary_sensor",
+    "cover",
+    "light",
+    "switch",
+    "climate",
+    "lock",
+    "select",
+    "input_boolean",
+    "input_select",
+    "button",
+    "number",
+    "device_tracker",
+    "person",
+    "alarm_control_panel",
+    "automation",
+    "fan",
+    "humidifier",
+    "media_player",
+    "remote",
+    "scene",
+    "script",
+    "vacuum",
+    "water_heater",
+    "weather",
+]
+
+NOTIFY_SERVICE_OPTIONS = [
+    "persistent_notification.create",
+    "notify.notify",
+]
+
+
+def _csv_to_list(value: str, *, lowercase: bool = True) -> list[str]:
+    """Convert a comma-separated string to a normalized list."""
+    parts = [part.strip() for part in value.split(",") if part.strip()]
+    if lowercase:
+        return [part.lower() for part in parts]
+    return parts
+
+
+def _list_to_csv(value: list[str] | tuple[str, ...] | None) -> str:
+    """Convert a list to a comma-separated string."""
+    if not value:
+        return ""
+    return ",".join(value)
+
+
+def _normalize_list(value: Any, *, lowercase: bool = True) -> list[str]:
+    """Normalize selector or CSV output to a list."""
+    if not value:
+        return []
+    if isinstance(value, str):
+        return _csv_to_list(value, lowercase=lowercase)
+    items = [str(item).strip() for item in value if str(item).strip()]
+    if lowercase:
+        return [item.lower() for item in items]
+    return items
+
+
+def _validate_report_time(value: str) -> str:
+    """Validate a HH:MM time string."""
+    if not TIME_RE.match(value):
+        raise vol.Invalid("Report time must use HH:MM format")
+    return value
+
+
+def _normalize_user_input(user_input: dict[str, Any]) -> dict[str, Any]:
+    """Normalize config flow user input."""
+    return {
+        CONF_INCLUDED_DOMAINS: _normalize_list(user_input[CONF_INCLUDED_DOMAINS]),
+        CONF_INCLUDED_DEVICE_IDS: _normalize_list(
+            user_input.get(CONF_INCLUDED_DEVICE_IDS), lowercase=False
+        ),
+        CONF_INCLUDED_ENTITY_IDS: _normalize_list(
+            user_input.get(CONF_INCLUDED_ENTITY_IDS)
+        ),
+        CONF_EXCLUDED_ENTITY_GLOBS: _csv_to_list(
+            user_input.get(CONF_EXCLUDED_ENTITY_GLOBS, "")
+        ),
+        CONF_REPORT_TIME: _validate_report_time(
+            str(user_input[CONF_REPORT_TIME]).strip()
+        ),
+        CONF_MAX_DAYS: user_input[CONF_MAX_DAYS],
+        CONF_ENABLE_AI_SUMMARY: user_input[CONF_ENABLE_AI_SUMMARY],
+        CONF_AI_TASK_ENTITY_ID: user_input.get(CONF_AI_TASK_ENTITY_ID, "").strip(),
+        CONF_NOTIFY_SERVICE: user_input[CONF_NOTIFY_SERVICE].strip(),
+    }
+
+
+def _schema(defaults: dict[str, Any]) -> vol.Schema:
+    """Build the config form schema."""
+    return vol.Schema(
+        {
+            vol.Required(
+                CONF_INCLUDED_DOMAINS,
+                default=defaults.get(CONF_INCLUDED_DOMAINS, DEFAULT_INCLUDED_DOMAINS),
+            ): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=DOMAIN_OPTIONS,
+                    multiple=True,
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
+            ),
+            vol.Optional(
+                CONF_INCLUDED_DEVICE_IDS,
+                default=defaults.get(CONF_INCLUDED_DEVICE_IDS, []),
+            ): selector.DeviceSelector(
+                selector.DeviceSelectorConfig(multiple=True)
+            ),
+            vol.Optional(
+                CONF_INCLUDED_ENTITY_IDS,
+                default=defaults.get(CONF_INCLUDED_ENTITY_IDS, []),
+            ): selector.EntitySelector(
+                selector.EntitySelectorConfig(multiple=True)
+            ),
+            vol.Optional(
+                CONF_EXCLUDED_ENTITY_GLOBS,
+                default=_list_to_csv(defaults.get(CONF_EXCLUDED_ENTITY_GLOBS, [])),
+            ): str,
+            vol.Required(
+                CONF_REPORT_TIME,
+                default=defaults.get(CONF_REPORT_TIME, DEFAULT_REPORT_TIME),
+            ): selector.TimeSelector(),
+            vol.Required(
+                CONF_MAX_DAYS,
+                default=defaults.get(CONF_MAX_DAYS, DEFAULT_MAX_DAYS),
+            ): vol.All(vol.Coerce(int), vol.Range(min=7, max=120)),
+            vol.Required(
+                CONF_ENABLE_AI_SUMMARY,
+                default=defaults.get(
+                    CONF_ENABLE_AI_SUMMARY, DEFAULT_ENABLE_AI_SUMMARY
+                ),
+            ): cv.boolean,
+            vol.Optional(
+                CONF_AI_TASK_ENTITY_ID,
+                default=defaults.get(CONF_AI_TASK_ENTITY_ID, ""),
+            ): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="ai_task")
+            ),
+            vol.Required(
+                CONF_NOTIFY_SERVICE,
+                default=defaults.get(CONF_NOTIFY_SERVICE, DEFAULT_NOTIFY_SERVICE),
+            ): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=NOTIFY_SERVICE_OPTIONS,
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
+            ),
+        }
+    )
+
+
+class HomeDailyReportConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
+    """Handle a Home Daily Report config flow."""
+
+    VERSION = 1
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(
+        config_entry: config_entries.ConfigEntry,
+    ) -> HomeDailyReportOptionsFlow:
+        """Create the options flow."""
+        return HomeDailyReportOptionsFlow(config_entry)
+
+    async def async_step_user(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.ConfigFlowResult:
+        """Handle the initial step."""
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            try:
+                data = _normalize_user_input(user_input)
+            except vol.Invalid:
+                errors["base"] = "invalid_report_time"
+            else:
+                await self.async_set_unique_id(DOMAIN)
+                self._abort_if_unique_id_configured()
+                return self.async_create_entry(title=NAME, data=data)
+
+        return self.async_show_form(
+            step_id="user",
+            data_schema=_schema({}),
+            errors=errors,
+        )
+
+
+class HomeDailyReportOptionsFlow(config_entries.OptionsFlow):
+    """Handle Home Daily Report options."""
+
+    def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
+        """Initialize options flow."""
+        self.config_entry = config_entry
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.ConfigFlowResult:
+        """Manage integration options."""
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            try:
+                options = _normalize_user_input(user_input)
+            except vol.Invalid:
+                errors["base"] = "invalid_report_time"
+            else:
+                return self.async_create_entry(title="", data=options)
+
+        defaults = {**self.config_entry.data, **self.config_entry.options}
+        return self.async_show_form(
+            step_id="init",
+            data_schema=_schema(defaults),
+            errors=errors,
+        )

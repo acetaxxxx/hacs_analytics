@@ -1,0 +1,71 @@
+{
+  "title": "Home Daily Report",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Set up Home Daily Report",
+        "description": "Track selected entities, generate daily rollups, and optionally summarize them with Home Assistant AI Task.",
+        "data": {
+          "included_domains": "Included domains",
+          "included_device_ids": "Included devices",
+          "included_entity_ids": "Included entities",
+          "excluded_entity_globs": "Excluded entity globs",
+          "report_time": "Daily report time",
+          "max_days": "Retention days",
+          "enable_ai_summary": "Use AI Task summaries",
+          "ai_task_entity_id": "AI Task entity ID",
+          "notify_service": "Notification service"
+        },
+        "data_description": {
+          "included_domains": "Select the domains to track.",
+          "included_device_ids": "Optional. Leave empty to track all matching entities in the selected domains.",
+          "included_entity_ids": "Optional. Select helper entities or any specific entities to always include.",
+          "excluded_entity_globs": "Comma-separated entity glob patterns, such as sensor.time*,sensor.date*.",
+          "report_time": "Local time to generate the daily report.",
+          "max_days": "Number of days of rollups to keep.",
+          "enable_ai_summary": "Send report rollups to Home Assistant AI Task when generating summaries.",
+          "ai_task_entity_id": "Optional. Pick a specific AI Task entity.",
+          "notify_service": "Select a common notification service or enter another service name."
+        }
+      }
+    },
+    "error": {
+      "invalid_report_time": "Use HH:MM format, such as 03:00."
+    },
+    "abort": {
+      "already_configured": "Home Daily Report is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Home Daily Report options",
+        "data": {
+          "included_domains": "Included domains",
+          "included_device_ids": "Included devices",
+          "included_entity_ids": "Included entities",
+          "excluded_entity_globs": "Excluded entity globs",
+          "report_time": "Daily report time",
+          "max_days": "Retention days",
+          "enable_ai_summary": "Use AI Task summaries",
+          "ai_task_entity_id": "AI Task entity ID",
+          "notify_service": "Notification service"
+        },
+        "data_description": {
+          "included_domains": "Select the domains to track.",
+          "included_device_ids": "Optional. Leave empty to track all matching entities in the selected domains.",
+          "included_entity_ids": "Optional. Select helper entities or any specific entities to always include.",
+          "excluded_entity_globs": "Comma-separated entity glob patterns, such as sensor.time*,sensor.date*.",
+          "report_time": "Local time to generate the daily report.",
+          "max_days": "Number of days of rollups to keep.",
+          "enable_ai_summary": "Send report rollups to Home Assistant AI Task when generating summaries.",
+          "ai_task_entity_id": "Optional. Pick a specific AI Task entity.",
+          "notify_service": "Select a common notification service or enter another service name."
+        }
+      }
+    },
+    "error": {
+      "invalid_report_time": "Use HH:MM format, such as 03:00."
+    }
+  }
+}

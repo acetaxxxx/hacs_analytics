@@ -1,0 +1,22 @@
+generate_report:
+  name: Generate report
+  description: Generate a compact daily rollup and optionally send it to AI Task.
+  fields:
+    date:
+      name: Date
+      description: Date to report in YYYY-MM-DD format. Defaults to yesterday.
+      example: "2026-06-18"
+      selector:
+        text:
+    use_ai:
+      name: Use AI Task
+      description: Send the rollup to ai_task.generate_data.
+      default: true
+      selector:
+        boolean:
+    notify:
+      name: Notify
+      description: Send the resulting report to the configured notification service.
+      default: true
+      selector:
+        boolean:
