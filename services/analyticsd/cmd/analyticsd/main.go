@@ -13,23 +13,30 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/acetaxxxx/hacs_analytics/services/analyticsd/internal/gemini"
 	"github.com/acetaxxxx/hacs_analytics/services/analyticsd/internal/httpapi"
+	"github.com/acetaxxxx/hacs_analytics/services/analyticsd/internal/report"
 	"github.com/acetaxxxx/hacs_analytics/services/analyticsd/internal/store"
+	"github.com/acetaxxxx/hacs_analytics/services/analyticsd/internal/worker"
 )
 
 const (
 	defaultListenAddress = ":8080"
 	defaultDatabasePath  = "./data/homekeeper.db"
-	defaultMaxBodyBytes = 1 << 20
+	defaultMaxBodyBytes  = 1 << 20
+	defaultGeminiModel   = gemini.DefaultModel
 )
 
 type config struct {
-	listenAddress   string
-	databasePath    string
-	sharedToken     string
-	contractMajor   string
-	maxBodyBytes    int64
+	listenAddress    string
+	databasePath     string
+	sharedToken      string
+	contractMajor    string
+	maxBodyBytes     int64
 	geminiConfigured bool
+	geminiAPIKey     string
+	geminiModel      string
+	timezone         string
 }
 
 func main() {
@@ -39,13 +46,23 @@ func main() {
 		logger.Error("invalid configuration", "error", err)
 		os.Exit(1)
 	}
+	ctx := context.Background()
+	var llmClient report.LLMClient
+	if cfg.geminiAPIKey != "" {
+		client, clientErr := gemini.New(ctx, cfg.geminiAPIKey, cfg.geminiModel)
+		if clientErr != nil {
+			logger.Warn("Gemini is not available", "error", clientErr)
+		} else {
+			llmClient = client
+			cfg.geminiConfigured = true
+		}
+	}
 
 	if err := os.MkdirAll(filepathDir(cfg.databasePath), 0o750); err != nil {
 		logger.Error("create database directory", "error", err)
 		os.Exit(1)
 	}
 
-	ctx := context.Background()
 	database, err := store.Open(ctx, cfg.databasePath)
 	if err != nil {
 		logger.Error("database startup failed", "error", err)
@@ -76,6 +93,34 @@ func main() {
 
 	shutdownContext, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	location := time.Local
+	if cfg.timezone != "" {
+		if configured, locationErr := time.LoadLocation(cfg.timezone); locationErr != nil {
+			logger.Warn("invalid HOMEKEEPER_TIMEZONE; using local timezone", "timezone", cfg.timezone, "error", locationErr)
+		} else {
+			location = configured
+		}
+	}
+	reportWorker := &worker.ReportWorker{Store: database, LLM: llmClient, Location: location, Model: cfg.geminiModel, Interval: 30 * time.Second}
+	go func() {
+		if workerErr := reportWorker.Run(shutdownContext); workerErr != nil && !errors.Is(workerErr, context.Canceled) {
+			logger.Error("report worker stopped", "error", workerErr)
+		}
+	}()
+	go func() {
+		maintenanceTicker := time.NewTicker(6 * time.Hour)
+		defer maintenanceTicker.Stop()
+		for {
+			select {
+			case <-shutdownContext.Done():
+				return
+			case now := <-maintenanceTicker.C:
+				if purgeErr := database.PurgeRetention(shutdownContext, now); purgeErr != nil {
+					logger.Warn("retention purge failed", "error", purgeErr)
+				}
+			}
+		}
+	}()
 	go func() {
 		<-shutdownContext.Done()
 		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -98,6 +143,7 @@ func loadConfig() (config, error) {
 		databasePath:  defaultDatabasePath,
 		contractMajor: "1",
 		maxBodyBytes:  defaultMaxBodyBytes,
+		geminiModel:   defaultGeminiModel,
 	}
 	if value := strings.TrimSpace(os.Getenv("HOMEKEEPER_LISTEN_ADDR")); value != "" {
 		cfg.listenAddress = value
@@ -119,7 +165,14 @@ func loadConfig() (config, error) {
 		}
 		cfg.maxBodyBytes = parsed
 	}
-	cfg.geminiConfigured = strings.TrimSpace(os.Getenv("GEMINI_API_KEY")) != ""
+	cfg.geminiAPIKey = strings.TrimSpace(os.Getenv("GEMINI_API_KEY"))
+	if value := strings.TrimSpace(os.Getenv("HOMEKEEPER_GEMINI_MODEL")); value != "" {
+		cfg.geminiModel = value
+	}
+	if !strings.HasPrefix(cfg.geminiModel, "gemini-") || len(cfg.geminiModel) <= len("gemini-") || len(cfg.geminiModel) > 128 {
+		return config{}, errors.New("HOMEKEEPER_GEMINI_MODEL must be a gemini-* model name")
+	}
+	cfg.timezone = strings.TrimSpace(os.Getenv("HOMEKEEPER_TIMEZONE"))
 	return cfg, nil
 }
 

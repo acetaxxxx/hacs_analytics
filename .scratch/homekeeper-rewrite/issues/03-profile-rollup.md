@@ -4,7 +4,7 @@
 
 **Blocked by:** 02: Event Ingest 與 Heartbeat
 
-**Status:** ready-for-agent
+**Status:** implemented (host validation pending)
 
 - [ ] 實作 numeric、binary、battery、energy、climate、contact/security、light/media、generic profile 的選擇優先順序。
 - [ ] 預設全選 entity、explicit exclude 優先，且可逐 entity override profile、snapshot interval、threshold 與安全 metadata。

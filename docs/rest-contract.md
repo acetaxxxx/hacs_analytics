@@ -2,6 +2,10 @@
 
 The OpenAPI source of truth is [`contracts/openapi.yaml`](../contracts/openapi.yaml). All timestamps are RFC 3339 UTC strings unless a field explicitly says local date/time. All requests include `Authorization: Bearer <shared-token>` and a unique `X-Request-ID`.
 
+All protected endpoints, including report polling, require both `X-Request-ID`
+and `X-Homekeeper-Contract-Version: 1`. Health endpoints are public and are
+intended for container probes.
+
 ## Endpoints
 
 | Method | Path | Purpose |

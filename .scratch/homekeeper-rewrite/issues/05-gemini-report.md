@@ -4,7 +4,7 @@
 
 **Blocked by:** 04: Deterministic Anomaly 與 Risk Evidence
 
-**Status:** ready-for-agent
+**Status:** implemented (host validation pending)
 
 - [ ] 直接使用 pinned `google.golang.org/genai` 呼叫 Gemini Developer API，API key 僅來自 sidecar secret。
 - [ ] model 從 HA 設定，預設 Flash，允許支援的 Gemini model（包含 Pro）。

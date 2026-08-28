@@ -4,7 +4,7 @@
 
 **Blocked by:** 05: Gemini Structured Report Lifecycle
 
-**Status:** ready-for-agent
+**Status:** implemented (host validation pending)
 
 - [ ] HA integration 能排程一個 active report time（預設 08:00，可選 12:00、18:00、22:00），請求前一個完整 local calendar day。
 - [ ] 支援指定 `YYYY-MM-DD` 的 manual report，並與排程共用 report-date idempotency。

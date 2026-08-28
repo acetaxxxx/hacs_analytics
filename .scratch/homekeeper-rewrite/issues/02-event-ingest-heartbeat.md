@@ -4,7 +4,7 @@
 
 **Blocked by:** 01: Sidecar 基礎、Health 與 Contract
 
-**Status:** ready-for-agent
+**Status:** implemented (host validation pending)
 
 - [ ] HA integration 在 30 秒或 100 筆事件時送出 bounded event batch，不阻塞 HA event loop。
 - [ ] Sidecar 驗證 batch 後以 transaction 寫入 raw event，重複 `event_id` 不會重複計算。

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"regexp"
@@ -38,6 +39,14 @@ type IngestStore interface {
 	IngestHeartbeat(ctx context.Context, heartbeat store.Heartbeat, tolerance time.Duration) (store.HeartbeatResult, error)
 }
 
+// ReportStore is optional during the foundation phase; production SQLite
+// implements it and tests can provide only the ingest surface.
+type ReportStore interface {
+	RequestReport(context.Context, string, string) (store.ReportJob, error)
+	GetReportJob(context.Context, string) (store.ReportJob, error)
+	GetReportResult(context.Context, string) ([]byte, error)
+}
+
 // Config configures the HTTP boundary. Secrets are never included in a
 // response or an error.
 type Config struct {
@@ -67,8 +76,9 @@ type errorResponse struct {
 }
 
 type server struct {
-	config Config
-	store  IngestStore
+	config      Config
+	store       IngestStore
+	reportStore ReportStore
 }
 
 // NewServer validates the HTTP boundary configuration and returns an
@@ -89,7 +99,11 @@ func NewServer(config Config, st IngestStore) (*server, error) {
 	if config.MaxBodyBytes < 1 {
 		return nil, errors.New("max body bytes must be positive")
 	}
-	return &server{config: config, store: st}, nil
+	var reportStore ReportStore
+	if candidate, ok := st.(ReportStore); ok {
+		reportStore = candidate
+	}
+	return &server{config: config, store: st, reportStore: reportStore}, nil
 }
 
 // Handler returns the complete HTTP handler for the sidecar.
@@ -137,6 +151,13 @@ func (s *server) serveHTTP(writer http.ResponseWriter, request *http.Request) {
 	case request.Method == http.MethodPost && request.URL.Path == "/api/v1/ingest/heartbeat":
 		s.handleIngestHeartbeat(writer, request, requestID)
 		return
+	case request.Method == http.MethodPost && request.URL.Path == "/api/v1/reports":
+		s.handleReportRequest(writer, request, requestID)
+		return
+	}
+	if request.Method == http.MethodGet && strings.HasPrefix(request.URL.Path, "/api/v1/reports/") {
+		s.handleReportGet(writer, request, requestID)
+		return
 	}
 
 	writeError(writer, http.StatusNotFound, "not_found", "resource not found", requestID)
@@ -168,7 +189,7 @@ func (s *server) authenticate(writer http.ResponseWriter, request *http.Request)
 }
 
 func (s *server) handleHealth(writer http.ResponseWriter, request *http.Request) {
-	ready := s.store == nil || s.store.Ping(request.Context()) == nil
+	ready := s.store != nil && s.store.Ping(request.Context()) == nil
 	health := Health{
 		Status:           "ok",
 		Database:         "ready",
@@ -203,10 +224,16 @@ type eventBatchJSON struct {
 }
 
 func (s *server) handleIngestEvents(writer http.ResponseWriter, request *http.Request, requestID string) {
+	if s.store == nil {
+		writeError(writer, http.StatusServiceUnavailable, "not_ready", "ingest service is not ready", requestID)
+		return
+	}
 	var body eventBatchJSON
-	decoder := json.NewDecoder(request.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&body); err != nil {
+	if err := decodeStrict(request.Body, &body); err != nil {
+		if errors.Is(err, errBodyTooLarge) {
+			writeError(writer, http.StatusRequestEntityTooLarge, "body_too_large", "request body is too large", requestID)
+			return
+		}
 		writeError(writer, http.StatusBadRequest, "invalid_payload", "malformed JSON body", requestID)
 		return
 	}
@@ -283,12 +310,21 @@ func (s *server) handleIngestEvents(writer http.ResponseWriter, request *http.Re
 			writeError(writer, http.StatusBadRequest, "invalid_payload", "metadata exceeds 32 keys", requestID)
 			return
 		}
-		for _, val := range raw.Metadata {
+		for key, val := range raw.Metadata {
+			if len(key) == 0 || len(key) > 128 {
+				writeError(writer, http.StatusBadRequest, "invalid_payload", "metadata key exceeds 128 characters", requestID)
+				return
+			}
 			if val == nil {
 				continue
 			}
 			switch val.(type) {
-			case string, float64, bool:
+			case string:
+				if len(val.(string)) > 4096 {
+					writeError(writer, http.StatusBadRequest, "invalid_payload", "metadata value exceeds 4096 characters", requestID)
+					return
+				}
+			case float64, bool:
 			default:
 				writeError(writer, http.StatusBadRequest, "invalid_payload", "nested metadata values not allowed", requestID)
 				return
@@ -338,10 +374,16 @@ type heartbeatJSON struct {
 }
 
 func (s *server) handleIngestHeartbeat(writer http.ResponseWriter, request *http.Request, requestID string) {
+	if s.store == nil {
+		writeError(writer, http.StatusServiceUnavailable, "not_ready", "heartbeat service is not ready", requestID)
+		return
+	}
 	var body heartbeatJSON
-	decoder := json.NewDecoder(request.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&body); err != nil {
+	if err := decodeStrict(request.Body, &body); err != nil {
+		if errors.Is(err, errBodyTooLarge) {
+			writeError(writer, http.StatusRequestEntityTooLarge, "body_too_large", "request body is too large", requestID)
+			return
+		}
 		writeError(writer, http.StatusBadRequest, "invalid_payload", "malformed JSON body", requestID)
 		return
 	}
@@ -372,10 +414,122 @@ func (s *server) handleIngestHeartbeat(writer http.ResponseWriter, request *http
 	writeJSON(writer, http.StatusOK, result)
 }
 
+type reportRequestJSON struct {
+	ReportDate string `json:"report_date"`
+	Model      string `json:"model,omitempty"`
+	UseAI      *bool  `json:"use_ai,omitempty"`
+}
+
+func (s *server) handleReportRequest(writer http.ResponseWriter, request *http.Request, requestID string) {
+	if s.reportStore == nil {
+		writeError(writer, http.StatusServiceUnavailable, "not_ready", "report service is not ready", requestID)
+		return
+	}
+	var body reportRequestJSON
+	if err := decodeStrict(request.Body, &body); err != nil {
+		if errors.Is(err, errBodyTooLarge) {
+			writeError(writer, http.StatusRequestEntityTooLarge, "body_too_large", "request body is too large", requestID)
+			return
+		}
+		writeError(writer, http.StatusBadRequest, "invalid_payload", "malformed JSON body", requestID)
+		return
+	}
+	if !validReportDate(body.ReportDate) || (body.Model != "" && !validGeminiModel(body.Model)) {
+		writeError(writer, http.StatusBadRequest, "invalid_payload", "invalid report request", requestID)
+		return
+	}
+	useAI := true
+	if body.UseAI != nil {
+		useAI = *body.UseAI
+	}
+	configSnapshot, _ := json.Marshal(struct {
+		Model string `json:"model"`
+		UseAI bool   `json:"use_ai"`
+	}{Model: body.Model, UseAI: useAI})
+	job, err := s.reportStore.RequestReport(request.Context(), body.ReportDate, string(configSnapshot))
+	if err != nil {
+		writeError(writer, http.StatusInternalServerError, "internal_error", "failed to request report", requestID)
+		return
+	}
+	writeJSON(writer, http.StatusAccepted, job)
+}
+
+func (s *server) handleReportGet(writer http.ResponseWriter, request *http.Request, requestID string) {
+	if s.reportStore == nil {
+		writeError(writer, http.StatusServiceUnavailable, "not_ready", "report service is not ready", requestID)
+		return
+	}
+	path := strings.TrimPrefix(request.URL.Path, "/api/v1/reports/")
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) < 1 || !validReportDate(parts[0]) || len(parts) > 2 || (len(parts) == 2 && parts[1] != "result") {
+		writeError(writer, http.StatusNotFound, "not_found", "report not found", requestID)
+		return
+	}
+	job, err := s.reportStore.GetReportJob(request.Context(), parts[0])
+	if err != nil {
+		writeError(writer, http.StatusNotFound, "not_found", "report not found", requestID)
+		return
+	}
+	if len(parts) == 1 {
+		writeJSON(writer, http.StatusOK, job)
+		return
+	}
+	payload, err := s.reportStore.GetReportResult(request.Context(), parts[0])
+	if err != nil {
+		writeJSON(writer, http.StatusAccepted, job)
+		return
+	}
+	writeRawJSON(writer, http.StatusOK, payload)
+}
+
+func validReportDate(value string) bool {
+	parsed, err := time.Parse("2006-01-02", value)
+	return err == nil && parsed.Format("2006-01-02") == value
+}
+
+func validGeminiModel(value string) bool {
+	return strings.HasPrefix(value, "gemini-") && len(value) > len("gemini-") && len(value) <= 128
+}
+
+var errBodyTooLarge = errors.New("request body too large")
+
+func decodeStrict(body io.Reader, value any) error {
+	decoder := json.NewDecoder(body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(value); err != nil {
+		if isBodyTooLarge(err) {
+			return fmt.Errorf("%w: %v", errBodyTooLarge, err)
+		}
+		return err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return errors.New("multiple JSON values are not allowed")
+		}
+		if isBodyTooLarge(err) {
+			return fmt.Errorf("%w: %v", errBodyTooLarge, err)
+		}
+		return err
+	}
+	return nil
+}
+
+func isBodyTooLarge(err error) bool {
+	var maxBytesErr *http.MaxBytesError
+	return errors.As(err, &maxBytesErr) || strings.Contains(err.Error(), "request body too large")
+}
+
 func writeJSON(writer http.ResponseWriter, status int, value any) {
 	writer.Header().Set("Content-Type", "application/json")
 	writer.WriteHeader(status)
 	_ = json.NewEncoder(writer).Encode(value)
+}
+
+func writeRawJSON(writer http.ResponseWriter, status int, payload []byte) {
+	writer.Header().Set("Content-Type", "application/json")
+	writer.WriteHeader(status)
+	_, _ = writer.Write(payload)
 }
 
 func writeError(writer http.ResponseWriter, status int, code, message, requestID string) {

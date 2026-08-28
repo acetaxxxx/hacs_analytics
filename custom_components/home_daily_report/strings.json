@@ -4,7 +4,7 @@
     "step": {
       "user": {
         "title": "Set up Home Daily Report",
-        "description": "Track selected entities, generate daily rollups, and optionally summarize them with Home Assistant AI Task.",
+        "description": "Track selected entities, generate daily rollups, and optionally summarize them with the external Gemini sidecar.",
         "data": {
           "included_domains": "Included domains",
           "included_device_ids": "Included devices",
@@ -12,12 +12,12 @@
           "excluded_entity_globs": "Excluded entity globs",
           "report_time": "Daily report time",
           "max_days": "Retention days",
-          "enable_ai_summary": "Use AI Task summaries",
-          "ai_task_entity_id": "AI Task entity ID",
-          "notify_service": "Notification service",
+          "notify_service": "Notification service (for example notify.telegram)",
           "sidecar_url": "Analytics sidecar URL",
           "sidecar_token": "Analytics sidecar shared token",
-          "sidecar_timeout": "Analytics sidecar timeout"
+          "sidecar_timeout": "Analytics sidecar timeout",
+          "gemini_model": "Gemini model",
+          "profile_overrides": "Per-entity profile overrides (JSON)"
         },
         "data_description": {
           "included_domains": "Select the domains to track.",
@@ -26,17 +26,18 @@
           "excluded_entity_globs": "Comma-separated entity glob patterns, such as sensor.time*,sensor.date*.",
           "report_time": "Local time to generate the daily report.",
           "max_days": "Number of days of rollups to keep.",
-          "enable_ai_summary": "Send report rollups to Home Assistant AI Task when generating summaries.",
-          "ai_task_entity_id": "Optional. Pick a specific AI Task entity.",
-          "notify_service": "Select a common notification service or enter another service name.",
-          "sidecar_url": "Optional. HTTP(S) base URL of the external analytics sidecar.",
-          "sidecar_token": "Optional until the sidecar is enabled. Never include this token in logs or report attributes.",
-          "sidecar_timeout": "HTTP request timeout in seconds."
+          "notify_service": "Enter the existing Home Assistant notification service, such as notify.telegram.",
+          "sidecar_url": "Required HTTP(S) base URL of the external analytics sidecar.",
+          "sidecar_token": "Required shared token. Never include this token in logs or report attributes.",
+          "sidecar_timeout": "HTTP request timeout in seconds.",
+          "gemini_model": "Flash is recommended for daily reports; a supported Gemini Pro model is also allowed.",
+          "profile_overrides": "Optional JSON, for example {\"sensor.living_room_temperature\": {\"profile\": \"climate\", \"profile_version\": 2}}."
         }
       }
     },
     "error": {
-      "invalid_report_time": "Use HH:MM format, such as 03:00."
+      "invalid_report_time": "Choose one of 08:00, 12:00, 18:00, or 22:00.",
+      "invalid_config": "Check the sidecar, model, profile, and report-time settings."
     },
     "abort": {
       "already_configured": "Home Daily Report is already configured."
@@ -53,12 +54,12 @@
           "excluded_entity_globs": "Excluded entity globs",
           "report_time": "Daily report time",
           "max_days": "Retention days",
-          "enable_ai_summary": "Use AI Task summaries",
-          "ai_task_entity_id": "AI Task entity ID",
-          "notify_service": "Notification service",
+          "notify_service": "Notification service (for example notify.telegram)",
           "sidecar_url": "Analytics sidecar URL",
           "sidecar_token": "Analytics sidecar shared token",
-          "sidecar_timeout": "Analytics sidecar timeout"
+          "sidecar_timeout": "Analytics sidecar timeout",
+          "gemini_model": "Gemini model",
+          "profile_overrides": "Per-entity profile overrides (JSON)"
         },
         "data_description": {
           "included_domains": "Select the domains to track.",
@@ -67,17 +68,18 @@
           "excluded_entity_globs": "Comma-separated entity glob patterns, such as sensor.time*,sensor.date*.",
           "report_time": "Local time to generate the daily report.",
           "max_days": "Number of days of rollups to keep.",
-          "enable_ai_summary": "Send report rollups to Home Assistant AI Task when generating summaries.",
-          "ai_task_entity_id": "Optional. Pick a specific AI Task entity.",
-          "notify_service": "Select a common notification service or enter another service name.",
-          "sidecar_url": "Optional. HTTP(S) base URL of the external analytics sidecar.",
-          "sidecar_token": "Optional until the sidecar is enabled. Never include this token in logs or report attributes.",
-          "sidecar_timeout": "HTTP request timeout in seconds."
+          "notify_service": "Enter the existing Home Assistant notification service, such as notify.telegram.",
+          "sidecar_url": "Required HTTP(S) base URL of the external analytics sidecar.",
+          "sidecar_token": "Required shared token. Never include this token in logs or report attributes.",
+          "sidecar_timeout": "HTTP request timeout in seconds.",
+          "gemini_model": "Flash is recommended for daily reports; a supported Gemini Pro model is also allowed.",
+          "profile_overrides": "Optional JSON, for example {\"sensor.living_room_temperature\": {\"profile\": \"climate\", \"profile_version\": 2}}."
         }
       }
     },
     "error": {
-      "invalid_report_time": "Use HH:MM format, such as 03:00."
+      "invalid_report_time": "Choose one of 08:00, 12:00, 18:00, or 22:00.",
+      "invalid_config": "Check the sidecar, model, profile, and report-time settings."
     }
   }
 }

@@ -14,9 +14,9 @@ Illustrative layout:
 
 ```text
 hacs_analytics/
-  custom_components/homekeeper/  # HACS-installed Python integration
-  cmd/homekeeperd/                # Go HTTP service entry point
-  internal/                       # Go domain, adapters, SQLite, Gemini
+  custom_components/home_daily_report/  # HACS-installed Python integration
+  services/analyticsd/            # Independent Go HTTP service
+  services/analyticsd/internal/   # Go domain, adapters, SQLite, Gemini
   contracts/                      # versioned REST/report schemas
   docs/                           # architecture and operational decisions
   deploy/                         # Docker files and example environment

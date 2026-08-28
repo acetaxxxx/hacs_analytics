@@ -4,7 +4,7 @@
 
 **Blocked by:** 03: Entity Profiles 與 Daily Rollup
 
-**Status:** ready-for-agent
+**Status:** implemented (host validation pending)
 
 - [ ] 建立 14 天 baseline 與 `insufficient_baseline` 語意；cold start 仍執行固定安全規則。
 - [ ] 覆蓋 leak、smoke、gas、door/window、lock/security、abnormal temperature、long unavailable、abnormal energy 初始規則。

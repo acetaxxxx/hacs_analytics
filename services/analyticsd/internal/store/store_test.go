@@ -236,6 +236,146 @@ func TestIngestHeartbeatHealthyAndGap(t *testing.T) {
 	}
 }
 
+func TestIngestHeartbeatDetectsGapAfterOnlyOneHeartbeat(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "initial-gap.db")
+	ctx := context.Background()
+	st, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("Open() error: %v", err)
+	}
+	defer st.Close()
+
+	t0 := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+	if _, err := st.IngestHeartbeat(ctx, Heartbeat{SourceInstance: "ha-1", ObservedAt: t0}, 90*time.Second); err != nil {
+		t.Fatalf("initial heartbeat error: %v", err)
+	}
+	result, err := st.IngestHeartbeat(ctx, Heartbeat{SourceInstance: "ha-1", ObservedAt: t0.Add(10 * time.Minute)}, 90*time.Second)
+	if err != nil {
+		t.Fatalf("gap heartbeat error: %v", err)
+	}
+	if result.Status != "data_gap" || !result.GapDetected {
+		t.Fatalf("gap heartbeat result = %+v, want data_gap", result)
+	}
+
+	var count int
+	if err := st.DB().QueryRow("SELECT COUNT(*) FROM heartbeat_intervals WHERE source_instance = ?", "ha-1").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 3 {
+		t.Fatalf("heartbeat interval count = %d, want 3", count)
+	}
+}
+
+func TestReportLifecyclePersistsDeterministicAndLLMProvenance(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "reports.db")
+	ctx := context.Background()
+	st, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer st.Close()
+
+	job, err := st.RequestReport(ctx, "2026-08-28", `{"model":"gemini-2.5-flash","use_ai":true}`)
+	if err != nil || job.Status != "requested" {
+		t.Fatalf("RequestReport() = %+v, error = %v", job, err)
+	}
+	claimed, err := st.ClaimReport(ctx, "2026-08-28")
+	if err != nil || !claimed {
+		t.Fatalf("ClaimReport() claimed=%v, error=%v", claimed, err)
+	}
+	if err := st.SaveDeterministicReport(ctx, "2026-08-28", []byte(`{"schema_version":1}`)); err != nil {
+		t.Fatalf("SaveDeterministicReport() error = %v", err)
+	}
+	if err := st.MarkAIStarted(ctx, "2026-08-28"); err != nil {
+		t.Fatalf("MarkAIStarted() error = %v", err)
+	}
+	ended := time.Now().UTC()
+	if err := st.SaveLLMAttempt(ctx, LLMAttempt{
+		ReportDate: "2026-08-28", Attempt: 1, Provider: "gemini", Model: "gemini-2.5-flash",
+		RequestID: "report-1", StartedAt: ended.Add(-time.Second), EndedAt: &ended,
+		Status: "completed", InputHash: "hash",
+	}); err != nil {
+		t.Fatalf("SaveLLMAttempt() error = %v", err)
+	}
+	if err := st.SaveReportResult(ctx, "2026-08-28", []byte(`{"schema_version":1}`), "completed"); err != nil {
+		t.Fatalf("SaveReportResult() error = %v", err)
+	}
+	var deterministic, attempts int
+	if err := st.DB().QueryRow("SELECT deterministic_json IS NOT NULL FROM report_runs WHERE report_date = ?", "2026-08-28").Scan(&deterministic); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.DB().QueryRow("SELECT COUNT(*) FROM llm_attempts WHERE report_date = ?", "2026-08-28").Scan(&attempts); err != nil {
+		t.Fatal(err)
+	}
+	if deterministic != 1 || attempts != 1 {
+		t.Fatalf("persisted deterministic=%d attempts=%d, want 1 and 1", deterministic, attempts)
+	}
+}
+
+func TestRecoverExpiredReportLease(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "recovery.db")
+	ctx := context.Background()
+	st, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer st.Close()
+	if _, err := st.RequestReport(ctx, "2026-08-28", "{}"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.ClaimReport(ctx, "2026-08-28"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.DB().Exec("UPDATE report_runs SET lease_expires_at_ms = ? WHERE report_date = ?", time.Now().Add(-time.Minute).UnixMilli(), "2026-08-28"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.RecoverExpiredReports(ctx, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	job, err := st.GetReportJob(ctx, "2026-08-28")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.Status != "ai_retry_scheduled" || job.ErrorCode == nil || *job.ErrorCode != "worker_restarted" {
+		t.Fatalf("recovered job = %+v", job)
+	}
+}
+
+func TestPurgeRetentionRemovesReportProvenanceBeforeParent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "retention.db")
+	ctx := context.Background()
+	st, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	oldDate := "2024-01-01"
+	if _, err := st.RequestReport(ctx, oldDate, "{}"); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Date(2026, 8, 28, 0, 0, 0, 0, time.UTC)
+	if err := st.SaveLLMAttempt(ctx, LLMAttempt{
+		ReportDate: oldDate, Attempt: 1, Provider: "gemini", Model: "gemini-2.5-flash",
+		RequestID: "old-report", StartedAt: started, Status: "failed", InputHash: "hash",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.PurgeRetention(ctx, started); err != nil {
+		t.Fatalf("PurgeRetention() error = %v", err)
+	}
+	var reports, attempts int
+	if err := st.DB().QueryRow("SELECT COUNT(*) FROM report_runs WHERE report_date = ?", oldDate).Scan(&reports); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.DB().QueryRow("SELECT COUNT(*) FROM llm_attempts WHERE report_date = ?", oldDate).Scan(&attempts); err != nil {
+		t.Fatal(err)
+	}
+	if reports != 0 || attempts != 0 {
+		t.Fatalf("old report rows remain: reports=%d attempts=%d", reports, attempts)
+	}
+}
+
 func assertSchemaVersion(t *testing.T, db *sql.DB, want int) {
 	t.Helper()
 	var got int
@@ -260,7 +400,7 @@ func assertTableExists(t *testing.T, db *sql.DB, table string) {
 func assertPragma(t *testing.T, db *sql.DB, pragma, want string) {
 	t.Helper()
 	var got string
-	if err := db.QueryRow("PRAGMA "+pragma).Scan(&got); err != nil {
+	if err := db.QueryRow("PRAGMA " + pragma).Scan(&got); err != nil {
 		t.Fatalf("PRAGMA %s: %v", pragma, err)
 	}
 	if got != want {

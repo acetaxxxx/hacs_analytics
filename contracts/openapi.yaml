@@ -119,6 +119,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/ReportDate'
         - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/ContractVersion'
       responses:
         '200':
           description: Current report job state.
@@ -136,6 +137,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/ReportDate'
         - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/ContractVersion'
       responses:
         '200':
           description: Complete structured report.
@@ -271,6 +273,12 @@ components:
       required: [report_date]
       properties:
         report_date: {type: string, format: date}
+        model:
+          type: string
+          maxLength: 128
+          pattern: '^gemini-'
+        use_ai:
+          type: boolean
     ReportJob:
       type: object
       additionalProperties: false

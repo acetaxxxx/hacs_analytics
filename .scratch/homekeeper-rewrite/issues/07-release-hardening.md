@@ -4,7 +4,7 @@
 
 **Blocked by:** 06: HA Report Consumer 與 Telegram
 
-**Status:** ready-for-agent
+**Status:** implemented (host validation pending)
 
 - [ ] HACS 只 package Home Assistant integration；Go sidecar 有獨立 module、Docker build、設定、health、更新與 Windows 操作文件。
 - [ ] 補齊 HACS 所需 metadata、issue tracker、brand/icon 與 sidecar 安裝說明，不把 binary/token 放在 integration 目錄。

@@ -14,13 +14,34 @@ import (
 )
 
 type fakeStore struct {
-	pingErr          error
-	ingestEventsRes  store.IngestResult
-	ingestEventsErr  error
-	ingestHeartRes   store.HeartbeatResult
-	ingestHeartErr   error
-	lastEventBatch   store.EventBatch
-	lastHeartbeat    store.Heartbeat
+	pingErr         error
+	ingestEventsRes store.IngestResult
+	ingestEventsErr error
+	ingestHeartRes  store.HeartbeatResult
+	ingestHeartErr  error
+	lastEventBatch  store.EventBatch
+	lastHeartbeat   store.Heartbeat
+}
+
+type fakeReportStore struct {
+	fakeStore
+	job    store.ReportJob
+	result []byte
+}
+
+func (f *fakeReportStore) RequestReport(context.Context, string, string) (store.ReportJob, error) {
+	return f.job, nil
+}
+
+func (f *fakeReportStore) GetReportJob(context.Context, string) (store.ReportJob, error) {
+	return f.job, nil
+}
+
+func (f *fakeReportStore) GetReportResult(context.Context, string) ([]byte, error) {
+	if len(f.result) == 0 {
+		return nil, errors.New("not ready")
+	}
+	return f.result, nil
 }
 
 func (f *fakeStore) Ping(context.Context) error { return f.pingErr }
@@ -195,11 +216,11 @@ func TestIngestEventsValidation(t *testing.T) {
 
 	// Invalid payloads
 	invalidCases := []string{
-		`{}`,                                // missing required fields
+		`{}`, // missing required fields
 		`{"source_instance":"","sent_at":"2026-08-28T12:00:00Z","events":[]}`, // empty source_instance
-		`{"source_instance":"ha","sent_at":"invalid-date","events":[]}`,      // invalid date
-		`{"source_instance":"ha","sent_at":"2026-08-28T12:00:00Z","events":[{"event_id":"e1","observed_at":"2026-08-28T12:00:00Z","entity_id":"INVALID_ENTITY","kind":"state_change","new_state":"on","metadata":{}}]}`, // bad entity_id pattern
-		`{"source_instance":"ha","sent_at":"2026-08-28T12:00:00Z","events":[{"event_id":"e1","observed_at":"2026-08-28T12:00:00Z","entity_id":"sensor.temp","kind":"unknown_kind","new_state":"on","metadata":{}}]}`, // bad kind
+		`{"source_instance":"ha","sent_at":"invalid-date","events":[]}`,       // invalid date
+		`{"source_instance":"ha","sent_at":"2026-08-28T12:00:00Z","events":[{"event_id":"e1","observed_at":"2026-08-28T12:00:00Z","entity_id":"INVALID_ENTITY","kind":"state_change","new_state":"on","metadata":{}}]}`,              // bad entity_id pattern
+		`{"source_instance":"ha","sent_at":"2026-08-28T12:00:00Z","events":[{"event_id":"e1","observed_at":"2026-08-28T12:00:00Z","entity_id":"sensor.temp","kind":"unknown_kind","new_state":"on","metadata":{}}]}`,                 // bad kind
 		`{"source_instance":"ha","sent_at":"2026-08-28T12:00:00Z","events":[{"event_id":"e1","observed_at":"2026-08-28T12:00:00Z","entity_id":"sensor.temp","kind":"state_change","new_state":"on","metadata":{"nested":{"a":1}}}]}`, // nested metadata
 	}
 
@@ -259,5 +280,42 @@ func TestNewServerRejectsUnsafeConfiguration(t *testing.T) {
 		if _, err := NewServer(config, &fakeStore{}); err == nil {
 			t.Fatalf("NewServer(%+v) unexpectedly succeeded", config)
 		}
+	}
+}
+
+func TestReportEndpointsRequireContractAndReturnIdempotentJob(t *testing.T) {
+	st := &fakeReportStore{job: store.ReportJob{ReportDate: "2026-08-28", Status: "requested", Attempt: 0}}
+	server, err := NewServer(Config{SharedToken: "secret"}, st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/reports", strings.NewReader(`{"report_date":"2026-08-28","model":"gemini-2.5-flash","use_ai":true}`))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set(requestIDHeader, "report-request")
+	req.Header.Set(contractHeader, "1")
+	resp := httptest.NewRecorder()
+	server.Handler().ServeHTTP(resp, req)
+	if resp.Code != http.StatusAccepted {
+		t.Fatalf("report request status = %d, want 202", resp.Code)
+	}
+
+	statusReq := httptest.NewRequest(http.MethodGet, "/api/v1/reports/2026-08-28", nil)
+	statusReq.Header.Set("Authorization", "Bearer secret")
+	statusReq.Header.Set(requestIDHeader, "report-status")
+	statusReq.Header.Set(contractHeader, "1")
+	resp = httptest.NewRecorder()
+	server.Handler().ServeHTTP(resp, statusReq)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("report status = %d, want 200", resp.Code)
+	}
+
+	trailing := httptest.NewRequest(http.MethodPost, "/api/v1/reports", strings.NewReader(`{"report_date":"2026-08-28"}{}`))
+	trailing.Header.Set("Authorization", "Bearer secret")
+	trailing.Header.Set(requestIDHeader, "report-trailing")
+	trailing.Header.Set(contractHeader, "1")
+	resp = httptest.NewRecorder()
+	server.Handler().ServeHTTP(resp, trailing)
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("trailing JSON status = %d, want 400", resp.Code)
 	}
 }

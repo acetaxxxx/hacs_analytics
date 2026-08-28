@@ -1,13 +1,15 @@
 # Home Daily Report
 
-Home Daily Report is a Home Assistant custom integration that watches selected
-entities, builds compact daily rollups, and can pass those rollups to Home
-Assistant's `ai_task.generate_data` action for a daily AI summary.
+Homekeeper is a read-only Home Assistant housekeeper. A thin Home Assistant
+integration sends selected state observations to an independently deployed Go
+sidecar. The sidecar owns SQLite aggregation, deterministic anomaly/risk
+checks, and optional structured Gemini reports. It never executes a Home
+Assistant action.
 
-The integration does not need a Home Assistant long-lived token because it runs
-inside Home Assistant. It also does not store or call any AI provider credentials
-itself. Configure your preferred AI Task entity in Home Assistant, then let this
-integration send structured rollup data to `ai_task`.
+Home Assistant runs on the Raspberry Pi and does not write the analytics
+database to its SD card. Run `services/analyticsd` in Docker on the external
+Windows computer (or another always-on machine). Telegram remains configured in
+Home Assistant; the sidecar does not need Telegram credentials.
 
 ## What It Tracks
 
@@ -36,14 +38,32 @@ Copy `custom_components/home_daily_report` into your Home Assistant
 
 The config flow asks for:
 
-- Included devices. If none are selected, all matching domains are tracked.
+- Included devices. If none are selected, all entities in the selected domains are tracked.
 - Included entities, for helpers such as `input_boolean.guest_mode` or `input_select.home_mode`.
-- Included domains, selected from a multi-select dropdown.
+- Included domains, selected from a multi-select dropdown and all selected by default.
 - Entity exclude globs, for example `sensor.time*,sensor.date*`.
-- Daily report time, selected with a time picker.
+- Daily report time: 08:00, 12:00, 18:00, or 22:00.
 - Rollup retention days.
-- Whether to call `ai_task.generate_data`.
-- Notification service, for example `persistent_notification.create` or `notify.notify`.
+- Existing Home Assistant notification service, for example `notify.telegram`.
+- Sidecar URL, shared token, timeout, and Gemini model (Flash is the default).
+
+### External sidecar
+
+Build and run the sidecar separately; HACS does not install or supervise it:
+
+```sh
+cd services/analyticsd
+docker build -t homekeeper-analyticsd .
+docker run -d --name homekeeper-analyticsd -p 8080:8080 \
+  -e HOMEKEEPER_SHARED_TOKEN='use-a-long-random-token' \
+  -e GEMINI_API_KEY='your-gemini-api-key' \
+  -e HOMEKEEPER_TIMEZONE='Asia/Taipei' \
+  -v homekeeper-data:/data homekeeper-analyticsd
+```
+
+Enter `http://<computer-ip>:8080`, the same shared token, and the selected
+Gemini model in the integration options. Keep the port on the trusted LAN and
+do not commit either secret.
 
 ## Services
 
@@ -75,6 +95,8 @@ The event payload includes the rollup report and, when available, AI output.
 
 ## Notes
 
-This is an MVP. It intentionally favors cheap event-based daily rollups over
-scanning the full Home Assistant recorder database. Long-term recorder
-statistics can be added later for more accurate time-weighted averages.
+The sidecar retains raw observations for 30 days and derived rollups/reports for
+2 years. The first release intentionally does not migrate the old Home
+Assistant Store data, read the private Recorder database, or maintain a durable
+queue on the Raspberry Pi. An unavailable sidecar is shown as degraded and a
+missing heartbeat becomes an explicit `data_gap`.

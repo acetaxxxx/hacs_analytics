@@ -4,7 +4,7 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** implemented (host validation pending)
 
 - [ ] Go sidecar 可在 Docker 中啟動，並以清楚的 liveness/readiness 狀態回應 health request。
 - [ ] 建立 SQLite migration 基礎與 service 啟動檢查，但尚不實作 analytics domain。

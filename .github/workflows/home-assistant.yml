@@ -1,0 +1,37 @@
+name: Home Assistant integration
+
+on:
+  push:
+    paths:
+      - "custom_components/home_daily_report/**"
+      - ".github/workflows/home-assistant.yml"
+  pull_request:
+    paths:
+      - "custom_components/home_daily_report/**"
+      - ".github/workflows/home-assistant.yml"
+
+jobs:
+  syntax-and-metadata:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compile integration
+        run: python -m compileall -q custom_components/home_daily_report
+      - name: Validate metadata and JSON
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          manifest = json.loads(Path("custom_components/home_daily_report/manifest.json").read_text())
+          required = {"domain", "name", "version", "documentation", "issue_tracker", "codeowners"}
+          missing = required - manifest.keys()
+          if missing:
+              raise SystemExit(f"manifest missing: {sorted(missing)}")
+          json.loads(Path("custom_components/home_daily_report/strings.json").read_text())
+          if not Path("custom_components/home_daily_report/brand/icon.svg").exists():
+              raise SystemExit("brand icon is missing")
+          PY

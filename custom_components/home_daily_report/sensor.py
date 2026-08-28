@@ -68,7 +68,7 @@ class LastReportSensor(HomeDailyReportSensor):
         report = self.manager.last_report
         if not report:
             return None
-        return report.get("date")
+        return report.get("report_date", report.get("date"))
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -78,13 +78,12 @@ class LastReportSensor(HomeDailyReportSensor):
             return {}
         return {
             "summary": report.get("summary"),
-            "top_changers": report.get("top_changers"),
-            "availability": report.get("availability"),
-            "numeric_highlights": report.get("numeric_highlights"),
-            "anomalies": report.get("anomalies"),
-            "trends": report.get("trends"),
-            "trend_deltas": report.get("trend_deltas"),
-            "ai": report.get("ai"),
+            "anomaly_count": len(report.get("anomalies", [])),
+            "risk_count": len(report.get("risks", [])),
+            "confidence": report.get("confidence"),
+            "data_quality": report.get("data_quality"),
+            "ai_status": report.get("ai_status", report.get("ai")),
+            "status": report.get("status"),
         }
 
 
@@ -104,7 +103,10 @@ class AnomalyCountSensor(HomeDailyReportSensor):
     @property
     def native_value(self) -> int:
         """Return anomaly count."""
-        return self.manager.anomaly_count
+        report = self.manager.last_report
+        if not report:
+            return 0
+        return len(report.get("anomalies", [])) + len(report.get("risks", []))
 
 
 class TrackedEntityCountSensor(HomeDailyReportSensor):

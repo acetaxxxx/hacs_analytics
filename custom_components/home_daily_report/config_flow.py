@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import math
 import re
 from typing import Any
 from urllib.parse import urlsplit
@@ -10,11 +12,11 @@ import voluptuous as vol
 
 from homeassistant import config_entries
 from homeassistant.core import callback
-from homeassistant.helpers import config_validation as cv, selector
+from homeassistant.helpers import selector
 
 from .const import (
-    CONF_AI_TASK_ENTITY_ID,
-    CONF_ENABLE_AI_SUMMARY,
+    CONF_GEMINI_MODEL,
+    CONF_PROFILE_OVERRIDES,
     CONF_EXCLUDED_ENTITY_GLOBS,
     CONF_INCLUDED_DEVICE_IDS,
     CONF_INCLUDED_DOMAINS,
@@ -25,7 +27,7 @@ from .const import (
     CONF_SIDECAR_TIMEOUT,
     CONF_SIDECAR_TOKEN,
     CONF_SIDECAR_URL,
-    DEFAULT_ENABLE_AI_SUMMARY,
+    DEFAULT_GEMINI_MODEL,
     DEFAULT_INCLUDED_DOMAINS,
     DEFAULT_MAX_DAYS,
     DEFAULT_NOTIFY_SERVICE,
@@ -37,6 +39,8 @@ from .const import (
 )
 
 TIME_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
+ENTITY_ID_RE = re.compile(r"^[a-z0-9_]+\.[a-z0-9_]+$")
+SERVICE_RE = re.compile(r"^[a-z0-9_]+\.[a-z0-9_]+$")
 
 DOMAIN_OPTIONS = [
     "sensor",
@@ -65,12 +69,6 @@ DOMAIN_OPTIONS = [
     "water_heater",
     "weather",
 ]
-
-NOTIFY_SERVICE_OPTIONS = [
-    "persistent_notification.create",
-    "notify.notify",
-]
-
 
 def _csv_to_list(value: str, *, lowercase: bool = True) -> list[str]:
     """Convert a comma-separated string to a normalized list."""
@@ -101,15 +99,31 @@ def _normalize_list(value: Any, *, lowercase: bool = True) -> list[str]:
 
 def _validate_report_time(value: str) -> str:
     """Validate a HH:MM time string."""
-    if not TIME_RE.match(value):
+    if not TIME_RE.fullmatch(value) or value not in {"08:00", "12:00", "18:00", "22:00"}:
         raise vol.Invalid("Report time must use HH:MM format")
     return value
 
 
+def _validate_gemini_model(value: str) -> str:
+    """Allow only Gemini model identifiers, never an arbitrary endpoint."""
+    value = value.strip()
+    if not value.startswith("gemini-") or len(value) <= len("gemini-") or len(value) > 128:
+        raise vol.Invalid("Gemini model must be a supported gemini-* model")
+    return value
+
+
+def _validate_notify_service(value: str) -> str:
+    """Accept the user's existing HA notify service, including Telegram."""
+    value = value.strip().lower()
+    if not SERVICE_RE.fullmatch(value):
+        raise vol.Invalid("Notification service must use domain.service format")
+    return value
+
+
 def _validate_sidecar_url(value: str) -> str:
-    """Validate the optional sidecar base URL."""
+    """Validate the required external sidecar base URL."""
     if not value:
-        return value
+        raise vol.Invalid("Sidecar URL is required")
     try:
         parsed = urlsplit(value)
     except ValueError as err:
@@ -121,6 +135,80 @@ def _validate_sidecar_url(value: str) -> str:
     ):
         raise vol.Invalid("Sidecar URL must be an HTTP(S) URL")
     return value.rstrip("/")
+
+
+def _validate_sidecar_token(value: str) -> str:
+    """Require a non-trivial shared secret for protected ingest endpoints."""
+    value = value.strip()
+    if len(value) < 8 or len(value) > 256:
+        raise vol.Invalid("Sidecar token must be between 8 and 256 characters")
+    return value
+
+
+def _normalize_profile_overrides(value: Any) -> dict[str, dict[str, Any]]:
+    """Parse optional per-entity profile settings without arbitrary data."""
+    if not value:
+        return {}
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError as err:
+            raise vol.Invalid("Profile overrides must be valid JSON") from err
+    if not isinstance(value, dict):
+        raise vol.Invalid("Profile overrides must be a JSON object")
+    allowed = {
+        "numeric",
+        "binary",
+        "battery",
+        "energy",
+        "climate",
+        "contact_security",
+        "light_media",
+        "generic",
+    }
+    result: dict[str, dict[str, Any]] = {}
+    for entity_id, config in value.items():
+        if not isinstance(entity_id, str) or not ENTITY_ID_RE.fullmatch(entity_id.lower()) or not isinstance(config, dict):
+            raise vol.Invalid("Each profile override must map an entity ID to an object")
+        kind = str(config.get("profile", config.get("profile_kind", "generic"))).strip().lower()
+        if kind not in allowed:
+            raise vol.Invalid("Unknown profile override")
+        override: dict[str, Any] = {"profile_kind": kind}
+        try:
+            version = int(config.get("profile_version", 1))
+        except (TypeError, ValueError) as err:
+            raise vol.Invalid("Profile version must be an integer") from err
+        if version < 1:
+            raise vol.Invalid("Profile version must be positive")
+        override["profile_version"] = version
+        if "snapshot_interval" in config:
+            try:
+                interval = int(config["snapshot_interval"])
+            except (TypeError, ValueError) as err:
+                raise vol.Invalid("Snapshot interval must be an integer") from err
+            if interval < 0 or interval > 86400:
+                raise vol.Invalid("Snapshot interval must be between 0 and 86400 seconds")
+            override["snapshot_interval"] = interval
+        if "numeric_threshold" in config:
+            try:
+                threshold = float(config["numeric_threshold"])
+            except (TypeError, ValueError) as err:
+                raise vol.Invalid("Numeric threshold must be a number") from err
+            if not math.isfinite(threshold) or threshold < 0 or threshold > 1e15:
+                raise vol.Invalid("Numeric threshold must be between 0 and 1e15")
+            override["numeric_threshold"] = threshold
+        for key in ("allowed_states", "safe_metadata"):
+            if key not in config:
+                continue
+            values = config[key]
+            if not isinstance(values, list) or len(values) > 32 or any(
+                not isinstance(item, str) or not item.strip() or len(item) > 128
+                for item in values
+            ):
+                raise vol.Invalid(f"{key} must be a list of at most 32 strings")
+            override[key] = [item.strip() for item in values]
+        result[entity_id.lower()] = override
+    return result
 
 
 def _normalize_user_input(user_input: dict[str, Any]) -> dict[str, Any]:
@@ -140,15 +228,21 @@ def _normalize_user_input(user_input: dict[str, Any]) -> dict[str, Any]:
             str(user_input[CONF_REPORT_TIME]).strip()
         ),
         CONF_MAX_DAYS: user_input[CONF_MAX_DAYS],
-        CONF_ENABLE_AI_SUMMARY: user_input[CONF_ENABLE_AI_SUMMARY],
-        CONF_AI_TASK_ENTITY_ID: user_input.get(CONF_AI_TASK_ENTITY_ID, "").strip(),
-        CONF_NOTIFY_SERVICE: user_input[CONF_NOTIFY_SERVICE].strip(),
+        CONF_NOTIFY_SERVICE: _validate_notify_service(user_input[CONF_NOTIFY_SERVICE]),
         CONF_SIDECAR_URL: _validate_sidecar_url(
             str(user_input.get(CONF_SIDECAR_URL, DEFAULT_SIDECAR_URL)).strip()
         ),
-        CONF_SIDECAR_TOKEN: str(user_input.get(CONF_SIDECAR_TOKEN, "")).strip(),
+        CONF_SIDECAR_TOKEN: _validate_sidecar_token(
+            str(user_input.get(CONF_SIDECAR_TOKEN, ""))
+        ),
         CONF_SIDECAR_TIMEOUT: user_input.get(
             CONF_SIDECAR_TIMEOUT, DEFAULT_SIDECAR_TIMEOUT
+        ),
+        CONF_GEMINI_MODEL: _validate_gemini_model(
+            str(user_input.get(CONF_GEMINI_MODEL, DEFAULT_GEMINI_MODEL))
+        ),
+        CONF_PROFILE_OVERRIDES: _normalize_profile_overrides(
+            user_input.get(CONF_PROFILE_OVERRIDES, {})
         ),
     }
 
@@ -186,46 +280,42 @@ def _schema(defaults: dict[str, Any]) -> vol.Schema:
             vol.Required(
                 CONF_REPORT_TIME,
                 default=defaults.get(CONF_REPORT_TIME, DEFAULT_REPORT_TIME),
-            ): selector.TimeSelector(),
+            ): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=["08:00", "12:00", "18:00", "22:00"],
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
+            ),
             vol.Required(
                 CONF_MAX_DAYS,
                 default=defaults.get(CONF_MAX_DAYS, DEFAULT_MAX_DAYS),
             ): vol.All(vol.Coerce(int), vol.Range(min=7, max=120)),
             vol.Required(
-                CONF_ENABLE_AI_SUMMARY,
-                default=defaults.get(
-                    CONF_ENABLE_AI_SUMMARY, DEFAULT_ENABLE_AI_SUMMARY
-                ),
-            ): cv.boolean,
-            vol.Optional(
-                CONF_AI_TASK_ENTITY_ID,
-                default=defaults.get(CONF_AI_TASK_ENTITY_ID, ""),
-            ): selector.EntitySelector(
-                selector.EntitySelectorConfig(domain="ai_task")
-            ),
-            vol.Required(
                 CONF_NOTIFY_SERVICE,
                 default=defaults.get(CONF_NOTIFY_SERVICE, DEFAULT_NOTIFY_SERVICE),
-            ): selector.SelectSelector(
-                selector.SelectSelectorConfig(
-                    options=NOTIFY_SERVICE_OPTIONS,
-                    mode=selector.SelectSelectorMode.DROPDOWN,
-                )
-            ),
+            ): _validate_notify_service,
             vol.Required(
                 CONF_SIDECAR_URL,
                 default=defaults.get(CONF_SIDECAR_URL, DEFAULT_SIDECAR_URL),
             ): str,
-            vol.Optional(
+            vol.Required(
                 CONF_SIDECAR_TOKEN,
                 default=defaults.get(CONF_SIDECAR_TOKEN, ""),
-            ): selector.TextSelector(),
+            ): vol.All(str, _validate_sidecar_token),
             vol.Required(
                 CONF_SIDECAR_TIMEOUT,
                 default=defaults.get(
                     CONF_SIDECAR_TIMEOUT, DEFAULT_SIDECAR_TIMEOUT
                 ),
             ): vol.All(vol.Coerce(int), vol.Range(min=1, max=120)),
+            vol.Required(
+                CONF_GEMINI_MODEL,
+                default=defaults.get(CONF_GEMINI_MODEL, DEFAULT_GEMINI_MODEL),
+            ): _validate_gemini_model,
+            vol.Optional(
+                CONF_PROFILE_OVERRIDES,
+                default=json.dumps(defaults.get(CONF_PROFILE_OVERRIDES, {})),
+            ): str,
         }
     )
 
@@ -253,7 +343,7 @@ class HomeDailyReportConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             try:
                 data = _normalize_user_input(user_input)
             except vol.Invalid:
-                errors["base"] = "invalid_report_time"
+                errors["base"] = "invalid_config"
             else:
                 await self.async_set_unique_id(DOMAIN)
                 self._abort_if_unique_id_configured()
@@ -283,7 +373,7 @@ class HomeDailyReportOptionsFlow(config_entries.OptionsFlow):
             try:
                 options = _normalize_user_input(user_input)
             except vol.Invalid:
-                errors["base"] = "invalid_report_time"
+                errors["base"] = "invalid_config"
             else:
                 return self.async_create_entry(title="", data=options)
 

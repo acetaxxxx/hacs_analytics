@@ -60,8 +60,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if manager is not None:
         await manager.async_unload()
 
-    if not hass.data[DOMAIN]:
-        hass.data.pop(DOMAIN)
+    domain_data = hass.data.get(DOMAIN, {})
+    if not any(not key.startswith("_") for key in domain_data):
+        hass.services.async_remove(DOMAIN, SERVICE_GENERATE_REPORT)
+        hass.data.pop(DOMAIN, None)
 
     return unload_ok
 

@@ -92,6 +92,7 @@ CREATE TABLE report_runs (
   deterministic_json TEXT,
   report_json TEXT,
   report_schema_version INTEGER,
+  lease_expires_at_ms INTEGER,
   config_snapshot_json TEXT NOT NULL
 );
 

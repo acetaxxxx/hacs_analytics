@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Homekeeper">
+  <rect width="128" height="128" rx="24" fill="#3f51b5"/>
+  <path d="M25 61 64 28l39 33v39a8 8 0 0 1-8 8H33a8 8 0 0 1-8-8Z" fill="#fff"/>
+  <path d="M48 108V75h32v33" fill="#3f51b5"/>
+  <circle cx="64" cy="61" r="10" fill="#ffb300"/>
+</svg>
