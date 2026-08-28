@@ -413,9 +413,9 @@ class HomeDailyReportManager:
     async def _async_poll_report_until_ready(
         self, report_date: str, notify: bool
     ) -> None:
-        """Poll for up to 26 hours so scheduled Gemini retries can finish."""
+        """Poll for up to 36 hours so scheduled Gemini retries can finish."""
         assert self._sidecar_client is not None
-        for _ in range(26 * 60):
+        for _ in range(36 * 60):
             await asyncio.sleep(60)
             try:
                 result = await self._sidecar_client.async_get_report_result(report_date)
