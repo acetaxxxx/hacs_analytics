@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from datetime import date, datetime, timedelta
 import fnmatch
@@ -45,6 +46,7 @@ from .const import (
     STORE_KEY,
     STORE_VERSION,
 )
+from .sidecar import SidecarClient, SidecarError
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -69,6 +71,11 @@ class HomeDailyReportManager:
         self._listeners: list[Callable[[], None]] = []
         self._save_unsub: Callable[[], None] | None = None
         self._entity_registry: er.EntityRegistry | None = None
+        self._sidecar_client: SidecarClient | None = None
+        self._sidecar_probe_task: asyncio.Task[None] | None = None
+        self._sidecar_stop = asyncio.Event()
+        self._sidecar_status = "unconfigured"
+        self._sidecar_error: str | None = None
 
     @property
     def options(self) -> dict[str, Any]:
@@ -97,6 +104,16 @@ class HomeDailyReportManager:
             return 0
         return len(report.get("anomalies", []))
 
+    @property
+    def sidecar_status(self) -> str:
+        """Return sidecar connectivity status for the status sensor."""
+        return self._sidecar_status
+
+    @property
+    def sidecar_error(self) -> str | None:
+        """Return the last safe sidecar error code, if any."""
+        return self._sidecar_error
+
     async def async_load(self) -> None:
         """Load persisted rollups."""
         stored = await self._store.async_load()
@@ -109,6 +126,12 @@ class HomeDailyReportManager:
     async def async_start(self) -> None:
         """Start collecting data."""
         self._entity_registry = er.async_get(self.hass)
+        self._sidecar_client = SidecarClient(self.hass, self.options)
+        if self._sidecar_client.configured:
+            self._sidecar_status = "degraded"
+            self._sidecar_probe_task = self.hass.async_create_task(
+                self._async_sidecar_probe_loop()
+            )
         self._unsubscribers.append(
             self.hass.bus.async_listen(EVENT_STATE_CHANGED, self._handle_state_changed)
         )
@@ -119,6 +142,14 @@ class HomeDailyReportManager:
 
     async def async_unload(self) -> None:
         """Stop collecting data and persist the latest rollup."""
+        if self._sidecar_probe_task is not None:
+            self._sidecar_stop.set()
+            self._sidecar_probe_task.cancel()
+            try:
+                await self._sidecar_probe_task
+            except asyncio.CancelledError:
+                pass
+            self._sidecar_probe_task = None
         for unsub in self._unsubscribers:
             unsub()
         self._unsubscribers.clear()
@@ -126,6 +157,38 @@ class HomeDailyReportManager:
             self._save_unsub()
             self._save_unsub = None
         await self.async_save()
+
+    async def _async_sidecar_probe_loop(self) -> None:
+        """Probe the sidecar without making HA setup depend on it."""
+        while not self._sidecar_stop.is_set():
+            await self._async_probe_sidecar()
+            try:
+                await asyncio.wait_for(self._sidecar_stop.wait(), timeout=60)
+            except asyncio.TimeoutError:
+                continue
+
+    async def _async_probe_sidecar(self) -> None:
+        """Update sidecar status from one best-effort health request."""
+        if self._sidecar_client is None or not self._sidecar_client.configured:
+            return
+        try:
+            health = await self._sidecar_client.async_health()
+        except SidecarError as err:
+            self._set_sidecar_status("degraded", err.code)
+            return
+
+        if health.get("status") == "ok" and health.get("database") == "ready":
+            self._set_sidecar_status("healthy", None)
+        else:
+            self._set_sidecar_status("degraded", "not_ready")
+
+    def _set_sidecar_status(self, status: str, error: str | None) -> None:
+        """Update sidecar state and refresh status entities when it changes."""
+        if self._sidecar_status == status and self._sidecar_error == error:
+            return
+        self._sidecar_status = status
+        self._sidecar_error = error
+        self._notify_listeners()
 
     def async_add_listener(self, listener: Callable[[], None]) -> Callable[[], None]:
         """Subscribe to manager updates."""

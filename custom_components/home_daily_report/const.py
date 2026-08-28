@@ -16,6 +16,9 @@ CONF_MAX_DAYS = "max_days"
 CONF_ENABLE_AI_SUMMARY = "enable_ai_summary"
 CONF_AI_TASK_ENTITY_ID = "ai_task_entity_id"
 CONF_NOTIFY_SERVICE = "notify_service"
+CONF_SIDECAR_URL = "sidecar_url"
+CONF_SIDECAR_TOKEN = "sidecar_token"
+CONF_SIDECAR_TIMEOUT = "sidecar_timeout"
 
 DEFAULT_INCLUDED_DOMAINS = [
     "sensor",
@@ -33,6 +36,8 @@ DEFAULT_REPORT_TIME = "03:00"
 DEFAULT_MAX_DAYS = 35
 DEFAULT_ENABLE_AI_SUMMARY = True
 DEFAULT_NOTIFY_SERVICE = "persistent_notification.create"
+DEFAULT_SIDECAR_URL = ""
+DEFAULT_SIDECAR_TIMEOUT = 10
 
 STORE_VERSION = 1
 STORE_KEY = f"{DOMAIN}.rollups"

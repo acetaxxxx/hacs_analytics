@@ -14,7 +14,10 @@
           "max_days": "Retention days",
           "enable_ai_summary": "Use AI Task summaries",
           "ai_task_entity_id": "AI Task entity ID",
-          "notify_service": "Notification service"
+          "notify_service": "Notification service",
+          "sidecar_url": "Analytics sidecar URL",
+          "sidecar_token": "Analytics sidecar shared token",
+          "sidecar_timeout": "Analytics sidecar timeout"
         },
         "data_description": {
           "included_domains": "Select the domains to track.",
@@ -25,7 +28,10 @@
           "max_days": "Number of days of rollups to keep.",
           "enable_ai_summary": "Send report rollups to Home Assistant AI Task when generating summaries.",
           "ai_task_entity_id": "Optional. Pick a specific AI Task entity.",
-          "notify_service": "Select a common notification service or enter another service name."
+          "notify_service": "Select a common notification service or enter another service name.",
+          "sidecar_url": "Optional. HTTP(S) base URL of the external analytics sidecar.",
+          "sidecar_token": "Optional until the sidecar is enabled. Never include this token in logs or report attributes.",
+          "sidecar_timeout": "HTTP request timeout in seconds."
         }
       }
     },
@@ -49,7 +55,10 @@
           "max_days": "Retention days",
           "enable_ai_summary": "Use AI Task summaries",
           "ai_task_entity_id": "AI Task entity ID",
-          "notify_service": "Notification service"
+          "notify_service": "Notification service",
+          "sidecar_url": "Analytics sidecar URL",
+          "sidecar_token": "Analytics sidecar shared token",
+          "sidecar_timeout": "Analytics sidecar timeout"
         },
         "data_description": {
           "included_domains": "Select the domains to track.",
@@ -60,7 +69,10 @@
           "max_days": "Number of days of rollups to keep.",
           "enable_ai_summary": "Send report rollups to Home Assistant AI Task when generating summaries.",
           "ai_task_entity_id": "Optional. Pick a specific AI Task entity.",
-          "notify_service": "Select a common notification service or enter another service name."
+          "notify_service": "Select a common notification service or enter another service name.",
+          "sidecar_url": "Optional. HTTP(S) base URL of the external analytics sidecar.",
+          "sidecar_token": "Optional until the sidecar is enabled. Never include this token in logs or report attributes.",
+          "sidecar_timeout": "HTTP request timeout in seconds."
         }
       }
     },

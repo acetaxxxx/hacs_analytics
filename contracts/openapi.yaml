@@ -8,6 +8,17 @@ servers:
 security:
   - bearerAuth: []
 paths:
+  /api/v1/health/live:
+    get:
+      security: []
+      operationId: liveness
+      responses:
+        '200':
+          description: Process is alive.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Liveness'
   /api/v1/health:
     get:
       security: []
@@ -21,6 +32,10 @@ paths:
                 $ref: '#/components/schemas/Health'
         '503':
           description: Process is alive but the service is not ready.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
   /api/v1/ingest/events:
     post:
       operationId: ingestEvents
@@ -272,11 +287,17 @@ components:
     Health:
       type: object
       additionalProperties: false
-      required: [status, database]
+      required: [status, database, gemini_configured]
       properties:
         status: {type: string, enum: [ok, not_ready]}
         database: {type: string, enum: [ready, unavailable]}
         gemini_configured: {type: boolean}
+    Liveness:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status: {type: string, enum: [ok]}
     Error:
       type: object
       additionalProperties: false

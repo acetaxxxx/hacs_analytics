@@ -25,6 +25,7 @@ async def async_setup_entry(
             LastReportSensor(entry, manager),
             AnomalyCountSensor(entry, manager),
             TrackedEntityCountSensor(entry, manager),
+            SidecarStatusSensor(entry, manager),
         ]
     )
 
@@ -123,3 +124,25 @@ class TrackedEntityCountSensor(HomeDailyReportSensor):
     def native_value(self) -> int:
         """Return tracked entity count."""
         return self.manager.tracked_entity_count
+
+
+class SidecarStatusSensor(HomeDailyReportSensor):
+    """Expose whether the external analytics sidecar is reachable."""
+
+    _attr_name = "Sidecar Status"
+    _attr_icon = "mdi:server-network"
+
+    def __init__(self, entry: ConfigEntry, manager: HomeDailyReportManager) -> None:
+        """Initialize the sensor."""
+        super().__init__(entry, manager)
+        self._attr_unique_id = f"{entry.entry_id}_sidecar_status"
+
+    @property
+    def native_value(self) -> str:
+        """Return healthy, degraded, or unconfigured."""
+        return self.manager.sidecar_status
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return the last safe sidecar error code."""
+        return {"error": self.manager.sidecar_error}

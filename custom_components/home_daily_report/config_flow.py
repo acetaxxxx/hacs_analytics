@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from typing import Any
+from urllib.parse import urlsplit
 
 import voluptuous as vol
 
@@ -21,11 +22,16 @@ from .const import (
     CONF_MAX_DAYS,
     CONF_NOTIFY_SERVICE,
     CONF_REPORT_TIME,
+    CONF_SIDECAR_TIMEOUT,
+    CONF_SIDECAR_TOKEN,
+    CONF_SIDECAR_URL,
     DEFAULT_ENABLE_AI_SUMMARY,
     DEFAULT_INCLUDED_DOMAINS,
     DEFAULT_MAX_DAYS,
     DEFAULT_NOTIFY_SERVICE,
     DEFAULT_REPORT_TIME,
+    DEFAULT_SIDECAR_TIMEOUT,
+    DEFAULT_SIDECAR_URL,
     DOMAIN,
     NAME,
 )
@@ -100,6 +106,23 @@ def _validate_report_time(value: str) -> str:
     return value
 
 
+def _validate_sidecar_url(value: str) -> str:
+    """Validate the optional sidecar base URL."""
+    if not value:
+        return value
+    try:
+        parsed = urlsplit(value)
+    except ValueError as err:
+        raise vol.Invalid("Sidecar URL must be an HTTP(S) URL") from err
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.netloc
+        or any(char.isspace() for char in value)
+    ):
+        raise vol.Invalid("Sidecar URL must be an HTTP(S) URL")
+    return value.rstrip("/")
+
+
 def _normalize_user_input(user_input: dict[str, Any]) -> dict[str, Any]:
     """Normalize config flow user input."""
     return {
@@ -120,6 +143,13 @@ def _normalize_user_input(user_input: dict[str, Any]) -> dict[str, Any]:
         CONF_ENABLE_AI_SUMMARY: user_input[CONF_ENABLE_AI_SUMMARY],
         CONF_AI_TASK_ENTITY_ID: user_input.get(CONF_AI_TASK_ENTITY_ID, "").strip(),
         CONF_NOTIFY_SERVICE: user_input[CONF_NOTIFY_SERVICE].strip(),
+        CONF_SIDECAR_URL: _validate_sidecar_url(
+            str(user_input.get(CONF_SIDECAR_URL, DEFAULT_SIDECAR_URL)).strip()
+        ),
+        CONF_SIDECAR_TOKEN: str(user_input.get(CONF_SIDECAR_TOKEN, "")).strip(),
+        CONF_SIDECAR_TIMEOUT: user_input.get(
+            CONF_SIDECAR_TIMEOUT, DEFAULT_SIDECAR_TIMEOUT
+        ),
     }
 
 
@@ -182,6 +212,20 @@ def _schema(defaults: dict[str, Any]) -> vol.Schema:
                     mode=selector.SelectSelectorMode.DROPDOWN,
                 )
             ),
+            vol.Required(
+                CONF_SIDECAR_URL,
+                default=defaults.get(CONF_SIDECAR_URL, DEFAULT_SIDECAR_URL),
+            ): str,
+            vol.Optional(
+                CONF_SIDECAR_TOKEN,
+                default=defaults.get(CONF_SIDECAR_TOKEN, ""),
+            ): selector.TextSelector(),
+            vol.Required(
+                CONF_SIDECAR_TIMEOUT,
+                default=defaults.get(
+                    CONF_SIDECAR_TIMEOUT, DEFAULT_SIDECAR_TIMEOUT
+                ),
+            ): vol.All(vol.Coerce(int), vol.Range(min=1, max=120)),
         }
     )
 
