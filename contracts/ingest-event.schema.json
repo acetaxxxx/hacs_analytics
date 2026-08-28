@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/homekeeper/contracts/ingest-event.schema.json",
+  "title": "Homekeeper ingest event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["event_id", "observed_at", "entity_id", "kind", "new_state", "metadata"],
+  "properties": {
+    "event_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "observed_at": {"type": "string", "format": "date-time"},
+    "entity_id": {"type": "string", "pattern": "^[a-z0-9_]+\\.[a-z0-9_]+$"},
+    "kind": {"enum": ["state_change", "snapshot"]},
+    "old_state": {"type": ["string", "null"], "maxLength": 256},
+    "new_state": {"type": "string", "maxLength": 256},
+    "numeric_value": {"type": ["number", "null"], "maximum": 1e15, "minimum": -1e15},
+    "unit": {"type": ["string", "null"], "maxLength": 64},
+    "metadata": {"type": "object", "additionalProperties": {"type": ["string", "number", "boolean", "null"]}, "maxProperties": 32},
+    "profile_version": {"type": "integer", "minimum": 1, "default": 1}
+  }
+}

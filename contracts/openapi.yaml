@@ -1,0 +1,287 @@
+openapi: 3.0.3
+info:
+  title: Homekeeper sidecar API
+  version: 1.0.0
+  description: LAN-only API between the Home Assistant integration and the Go analytics service.
+servers:
+  - url: http://homekeeper-sidecar:8080
+security:
+  - bearerAuth: []
+paths:
+  /api/v1/health:
+    get:
+      security: []
+      operationId: health
+      responses:
+        '200':
+          description: Process and dependency status.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+        '503':
+          description: Process is alive but the service is not ready.
+  /api/v1/ingest/events:
+    post:
+      operationId: ingestEvents
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/ContractVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EventBatch'
+      responses:
+        '200':
+          description: Batch was validated and committed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IngestResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '429':
+          $ref: '#/components/responses/Busy'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /api/v1/ingest/heartbeat:
+    post:
+      operationId: ingestHeartbeat
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/ContractVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Heartbeat'
+      responses:
+        '200':
+          description: Heartbeat recorded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HeartbeatResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/v1/reports:
+    post:
+      operationId: requestReport
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/ContractVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReportRequest'
+      responses:
+        '202':
+          description: A new or existing idempotent report job.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReportJob'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /api/v1/reports/{report_date}:
+    get:
+      operationId: getReportStatus
+      parameters:
+        - $ref: '#/components/parameters/ReportDate'
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200':
+          description: Current report job state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReportJob'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/reports/{report_date}/result:
+    get:
+      operationId: getReportResult
+      parameters:
+        - $ref: '#/components/parameters/ReportDate'
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200':
+          description: Complete structured report.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Report'
+        '202':
+          description: Report is not complete.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReportJob'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  parameters:
+    RequestId:
+      name: X-Request-ID
+      in: header
+      required: true
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+    ContractVersion:
+      name: X-Homekeeper-Contract-Version
+      in: header
+      required: true
+      schema:
+        type: string
+        example: '1'
+    ReportDate:
+      name: report_date
+      in: path
+      required: true
+      schema:
+        type: string
+        format: date
+  responses:
+    BadRequest:
+      description: Invalid request.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unauthorized:
+      description: Missing or invalid shared token.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Conflict:
+      description: Conflicting request or unsupported contract.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    TooLarge:
+      description: Request or batch exceeds configured limit.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Busy:
+      description: Sidecar backpressure.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unavailable:
+      description: Service is not ready.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: Resource not found.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+  schemas:
+    EventBatch:
+      type: object
+      additionalProperties: false
+      required: [source_instance, sent_at, events]
+      properties:
+        source_instance:
+          type: string
+          minLength: 1
+          maxLength: 128
+        sent_at:
+          type: string
+          format: date-time
+        events:
+          type: array
+          maxItems: 100
+          items:
+            $ref: './ingest-event.schema.json'
+    IngestResult:
+      type: object
+      additionalProperties: false
+      required: [request_id, accepted, duplicates, ignored]
+      properties:
+        request_id: {type: string}
+        accepted: {type: integer, minimum: 0}
+        duplicates: {type: integer, minimum: 0}
+        ignored: {type: integer, minimum: 0}
+    Heartbeat:
+      type: object
+      additionalProperties: false
+      required: [source_instance, observed_at]
+      properties:
+        source_instance: {type: string, minLength: 1, maxLength: 128}
+        observed_at: {type: string, format: date-time}
+    HeartbeatResult:
+      type: object
+      additionalProperties: false
+      required: [status, gap_detected]
+      properties:
+        status: {type: string, enum: [healthy, data_gap]}
+        gap_detected: {type: boolean}
+    ReportRequest:
+      type: object
+      additionalProperties: false
+      required: [report_date]
+      properties:
+        report_date: {type: string, format: date}
+    ReportJob:
+      type: object
+      additionalProperties: false
+      required: [report_date, status, attempt]
+      properties:
+        report_date: {type: string, format: date}
+        status: {type: string, enum: [requested, collecting, deterministic_ready, ai_pending, ai_running, ai_retry_scheduled, completed, ai_failed]}
+        attempt: {type: integer, minimum: 0}
+        next_attempt_at: {type: [string, 'null'], format: date-time}
+        result_url: {type: [string, 'null'], format: uri}
+        error_code: {type: [string, 'null'], maxLength: 128}
+    Report:
+      $ref: './report.schema.json'
+    Health:
+      type: object
+      additionalProperties: false
+      required: [status, database]
+      properties:
+        status: {type: string, enum: [ok, not_ready]}
+        database: {type: string, enum: [ready, unavailable]}
+        gemini_configured: {type: boolean}
+    Error:
+      type: object
+      additionalProperties: false
+      required: [code, message]
+      properties:
+        code: {type: string, maxLength: 128}
+        message: {type: string, maxLength: 1000}
+        request_id: {type: [string, 'null'], maxLength: 128}

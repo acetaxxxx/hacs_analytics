@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/homekeeper/contracts/report.schema.json",
+  "title": "Homekeeper daily report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "report_date", "window", "summary", "data_quality", "anomalies", "risks", "patterns", "suggestions", "confidence", "evidence", "ai_status"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "report_date": {"type": "string", "format": "date"},
+    "window": {
+      "type": "object", "additionalProperties": false,
+      "required": ["start", "end", "timezone"],
+      "properties": {"start": {"type": "string", "format": "date-time"}, "end": {"type": "string", "format": "date-time"}, "timezone": {"type": "string", "minLength": 1}}
+    },
+    "summary": {"type": "string", "maxLength": 12000},
+    "data_quality": {
+      "type": "object", "additionalProperties": false,
+      "required": ["coverage", "data_gaps", "limitations"],
+      "properties": {"coverage": {"type": "number", "minimum": 0, "maximum": 1}, "data_gaps": {"type": "array", "items": {"type": "string", "maxLength": 256}}, "limitations": {"type": "array", "items": {"type": "string", "maxLength": 1000}}}
+    },
+    "anomalies": {"type": "array", "items": {"$ref": "#/$defs/finding"}},
+    "risks": {"type": "array", "items": {"$ref": "#/$defs/finding"}},
+    "patterns": {"type": "array", "items": {"$ref": "#/$defs/finding"}},
+    "suggestions": {"type": "array", "items": {"$ref": "#/$defs/finding"}},
+    "confidence": {"enum": ["high", "medium", "low", "insufficient_baseline"]},
+    "evidence": {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 128}},
+    "ai_status": {
+      "type": "object", "additionalProperties": false,
+      "required": ["status", "provider", "model"],
+      "properties": {"status": {"enum": ["completed", "ai_pending", "ai_failed"]}, "provider": {"const": "gemini"}, "model": {"type": "string", "maxLength": 128}, "attempt": {"type": "integer", "minimum": 0}, "error_code": {"type": ["string", "null"], "maxLength": 128}}
+    }
+  },
+  "$defs": {
+    "finding": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "title", "explanation", "evidence_ids", "confidence"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "level": {"enum": ["high", "medium", "low"]},
+        "title": {"type": "string", "maxLength": 1000},
+        "explanation": {"type": "string", "maxLength": 6000},
+        "entity_ids": {"type": "array", "items": {"type": "string", "maxLength": 128}},
+        "evidence_ids": {"type": "array", "items": {"type": "string", "maxLength": 128}},
+        "confidence": {"enum": ["high", "medium", "low", "insufficient_baseline"]},
+        "source": {"enum": ["deterministic", "ai_enriched", "ai"]}
+      }
+    }
+  }
+}
