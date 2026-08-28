@@ -10,6 +10,7 @@ import json
 import logging
 import math
 from typing import Any
+import uuid
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
@@ -70,9 +71,12 @@ class HomeDailyReportManager:
         self._unsubscribers: list[Callable[[], None]] = []
         self._listeners: list[Callable[[], None]] = []
         self._save_unsub: Callable[[], None] | None = None
+        self._flush_unsub: Callable[[], None] | None = None
+        self._pending_events: list[dict[str, Any]] = []
         self._entity_registry: er.EntityRegistry | None = None
         self._sidecar_client: SidecarClient | None = None
         self._sidecar_probe_task: asyncio.Task[None] | None = None
+        self._sidecar_heartbeat_task: asyncio.Task[None] | None = None
         self._sidecar_stop = asyncio.Event()
         self._sidecar_status = "unconfigured"
         self._sidecar_error: str | None = None
@@ -132,6 +136,9 @@ class HomeDailyReportManager:
             self._sidecar_probe_task = self.hass.async_create_task(
                 self._async_sidecar_probe_loop()
             )
+            self._sidecar_heartbeat_task = self.hass.async_create_task(
+                self._async_heartbeat_loop()
+            )
         self._unsubscribers.append(
             self.hass.bus.async_listen(EVENT_STATE_CHANGED, self._handle_state_changed)
         )
@@ -150,12 +157,24 @@ class HomeDailyReportManager:
             except asyncio.CancelledError:
                 pass
             self._sidecar_probe_task = None
+        if self._sidecar_heartbeat_task is not None:
+            self._sidecar_stop.set()
+            self._sidecar_heartbeat_task.cancel()
+            try:
+                await self._sidecar_heartbeat_task
+            except asyncio.CancelledError:
+                pass
+            self._sidecar_heartbeat_task = None
         for unsub in self._unsubscribers:
             unsub()
         self._unsubscribers.clear()
         if self._save_unsub is not None:
             self._save_unsub()
             self._save_unsub = None
+        if self._flush_unsub is not None:
+            self._flush_unsub()
+            self._flush_unsub = None
+        self._pending_events.clear()
         await self.async_save()
 
     async def _async_sidecar_probe_loop(self) -> None:
@@ -181,6 +200,33 @@ class HomeDailyReportManager:
             self._set_sidecar_status("healthy", None)
         else:
             self._set_sidecar_status("degraded", "not_ready")
+
+    async def _async_heartbeat_loop(self) -> None:
+        """Send periodic heartbeats to the sidecar every 60 seconds."""
+        while not self._sidecar_stop.is_set():
+            await self._async_send_heartbeat()
+            try:
+                await asyncio.wait_for(self._sidecar_stop.wait(), timeout=60)
+            except asyncio.TimeoutError:
+                continue
+
+    async def _async_send_heartbeat(self) -> None:
+        """Send one heartbeat to the sidecar."""
+        if self._sidecar_client is None or not self._sidecar_client.configured:
+            return
+        source_instance = getattr(self.entry, "entry_id", "homeassistant") or "homeassistant"
+        payload = {
+            "source_instance": source_instance,
+            "observed_at": dt_util.utcnow().isoformat(),
+        }
+        try:
+            await self._sidecar_client.async_ingest_heartbeat(payload)
+            self._set_sidecar_status("healthy", None)
+        except SidecarError as err:
+            self._set_sidecar_status("degraded", err.code)
+        except Exception as err:
+            _LOGGER.debug("Error sending sidecar heartbeat: %s", err)
+            self._set_sidecar_status("degraded", "connection")
 
     def _set_sidecar_status(self, status: str, error: str | None) -> None:
         """Update sidecar state and refresh status entities when it changes."""
@@ -289,6 +335,81 @@ class HomeDailyReportManager:
         if not is_snapshot:
             day["change_events"] += 1
         day["updated_at"] = now_iso
+
+        if self._sidecar_client is not None and self._sidecar_client.configured:
+            meta: dict[str, Any] = {}
+            friendly_name = new_state.attributes.get(ATTR_FRIENDLY_NAME, new_state.name)
+            if friendly_name is not None:
+                meta["friendly_name"] = str(friendly_name)
+            device_class = new_state.attributes.get(ATTR_DEVICE_CLASS)
+            if device_class is not None:
+                meta["device_class"] = str(device_class)
+
+            unit = new_state.attributes.get("unit_of_measurement")
+            unit_str = str(unit) if unit is not None else None
+
+            event_dto = {
+                "event_id": uuid.uuid4().hex,
+                "observed_at": now_iso,
+                "entity_id": new_state.entity_id,
+                "kind": "snapshot" if is_snapshot else "state_change",
+                "old_state": old_state.state if old_state is not None else None,
+                "new_state": state_value,
+                "numeric_value": numeric_value,
+                "unit": unit_str,
+                "metadata": meta,
+                "profile_version": 1,
+            }
+            self._queue_sidecar_event(event_dto)
+
+    def _queue_sidecar_event(self, event_dto: dict[str, Any]) -> None:
+        """Queue an event for batch delivery to the sidecar."""
+        if len(self._pending_events) >= 500:
+            self._pending_events.pop(0)
+        self._pending_events.append(event_dto)
+
+        if len(self._pending_events) >= 100:
+            if self._flush_unsub is not None:
+                self._flush_unsub()
+                self._flush_unsub = None
+            self.hass.async_create_task(self._async_flush_events())
+        elif self._flush_unsub is None:
+            self._flush_unsub = async_call_later(self.hass, 30, self._handle_flush_later)
+
+    @callback
+    def _handle_flush_later(self, _now: datetime) -> None:
+        """Flush queued events after debounce delay."""
+        self._flush_unsub = None
+        self.hass.async_create_task(self._async_flush_events())
+
+    async def _async_flush_events(self) -> None:
+        """Flush up to 100 queued events to the sidecar."""
+        if not self._pending_events or self._sidecar_client is None or not self._sidecar_client.configured:
+            return
+
+        batch_events = self._pending_events[:100]
+        self._pending_events = self._pending_events[100:]
+
+        source_instance = getattr(self.entry, "entry_id", "homeassistant") or "homeassistant"
+        batch = {
+            "source_instance": source_instance,
+            "sent_at": dt_util.utcnow().isoformat(),
+            "events": batch_events,
+        }
+
+        try:
+            await self._sidecar_client.async_ingest_events(batch)
+            self._set_sidecar_status("healthy", None)
+        except SidecarError as err:
+            self._set_sidecar_status("degraded", err.code)
+        except Exception as err:
+            _LOGGER.debug("Error flushing sidecar events: %s", err)
+            self._set_sidecar_status("degraded", "connection")
+
+        if len(self._pending_events) >= 100:
+            self.hass.async_create_task(self._async_flush_events())
+        elif self._pending_events and self._flush_unsub is None:
+            self._flush_unsub = async_call_later(self.hass, 30, self._handle_flush_later)
 
     def _record_numeric_sample(
         self,

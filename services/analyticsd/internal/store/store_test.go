@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestOpenAppliesMigrationAndSQLiteSettings(t *testing.T) {
@@ -19,6 +20,12 @@ func TestOpenAppliesMigrationAndSQLiteSettings(t *testing.T) {
 
 	assertSchemaVersion(t, store.DB(), CurrentSchemaVersion)
 	assertTableExists(t, store.DB(), "service_metadata")
+	assertTableExists(t, store.DB(), "events")
+	assertTableExists(t, store.DB(), "heartbeat_intervals")
+	assertTableExists(t, store.DB(), "state_intervals")
+	assertTableExists(t, store.DB(), "daily_rollups")
+	assertTableExists(t, store.DB(), "report_runs")
+	assertTableExists(t, store.DB(), "llm_attempts")
 	assertPragma(t, store.DB(), "foreign_keys", "1")
 	assertPragma(t, store.DB(), "journal_mode", "wal")
 
@@ -50,6 +57,182 @@ func TestOpenRejectsNewerSchema(t *testing.T) {
 	if err == nil {
 		store.Close()
 		t.Fatal("Open() succeeded for a newer schema")
+	}
+}
+
+func TestIngestEventsIdempotencyAndBatch(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "events.db")
+	ctx := context.Background()
+
+	st, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer st.Close()
+
+	numVal := 22.5
+	unit := "°C"
+	oldState := "21.0"
+	batch := EventBatch{
+		SourceInstance: "ha-main",
+		SentAt:         time.Now().UTC(),
+		Events: []IngestEvent{
+			{
+				EventID:        "evt-001",
+				ObservedAt:     time.Now().UTC(),
+				EntityID:       "sensor.living_room_temperature",
+				Kind:           "state_change",
+				OldState:       &oldState,
+				NewState:       "22.5",
+				NumericValue:   &numVal,
+				Unit:           &unit,
+				Metadata:       map[string]any{"friendly_name": "Living Room Temp"},
+				ProfileVersion: 1,
+			},
+			{
+				EventID:        "evt-002",
+				ObservedAt:     time.Now().UTC(),
+				EntityID:       "binary_sensor.front_door",
+				Kind:           "state_change",
+				NewState:       "on",
+				Metadata:       map[string]any{"device_class": "door"},
+				ProfileVersion: 1,
+			},
+		},
+	}
+
+	// First ingestion: 2 accepted, 0 duplicate
+	res1, err := st.IngestEvents(ctx, "req-1", batch)
+	if err != nil {
+		t.Fatalf("IngestEvents() error = %v", err)
+	}
+	if res1.Accepted != 2 || res1.Duplicates != 0 {
+		t.Fatalf("res1 got accepted=%d, duplicates=%d; want 2, 0", res1.Accepted, res1.Duplicates)
+	}
+
+	// Re-ingest same batch: 0 accepted, 2 duplicates (idempotent)
+	res2, err := st.IngestEvents(ctx, "req-2", batch)
+	if err != nil {
+		t.Fatalf("IngestEvents() error = %v", err)
+	}
+	if res2.Accepted != 0 || res2.Duplicates != 2 {
+		t.Fatalf("res2 got accepted=%d, duplicates=%d; want 0, 2", res2.Accepted, res2.Duplicates)
+	}
+
+	// Ingest batch with 1 duplicate and 1 new
+	batch2 := EventBatch{
+		SourceInstance: "ha-main",
+		SentAt:         time.Now().UTC(),
+		Events: []IngestEvent{
+			batch.Events[0],
+			{
+				EventID:        "evt-003",
+				ObservedAt:     time.Now().UTC(),
+				EntityID:       "light.kitchen",
+				Kind:           "snapshot",
+				NewState:       "off",
+				ProfileVersion: 1,
+			},
+		},
+	}
+	res3, err := st.IngestEvents(ctx, "req-3", batch2)
+	if err != nil {
+		t.Fatalf("IngestEvents() error = %v", err)
+	}
+	if res3.Accepted != 1 || res3.Duplicates != 1 {
+		t.Fatalf("res3 got accepted=%d, duplicates=%d; want 1, 1", res3.Accepted, res3.Duplicates)
+	}
+}
+
+func TestIngestHeartbeatHealthyAndGap(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "heartbeat.db")
+	ctx := context.Background()
+
+	st, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer st.Close()
+
+	t0 := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+	tolerance := 90 * time.Second
+
+	// 1. First heartbeat
+	res1, err := st.IngestHeartbeat(ctx, Heartbeat{
+		SourceInstance: "ha-1",
+		ObservedAt:     t0,
+	}, tolerance)
+	if err != nil {
+		t.Fatalf("Heartbeat 1 error: %v", err)
+	}
+	if res1.Status != "healthy" || res1.GapDetected {
+		t.Fatalf("Heartbeat 1 got %+v, want healthy, gap_detected=false", res1)
+	}
+
+	// 2. Next heartbeat 60s later (within 90s tolerance)
+	t1 := t0.Add(60 * time.Second)
+	res2, err := st.IngestHeartbeat(ctx, Heartbeat{
+		SourceInstance: "ha-1",
+		ObservedAt:     t1,
+	}, tolerance)
+	if err != nil {
+		t.Fatalf("Heartbeat 2 error: %v", err)
+	}
+	if res2.Status != "healthy" || res2.GapDetected {
+		t.Fatalf("Heartbeat 2 got %+v, want healthy, gap_detected=false", res2)
+	}
+
+	// 3. Heartbeat 10 minutes later (gap detected)
+	t2 := t1.Add(10 * time.Minute)
+	res3, err := st.IngestHeartbeat(ctx, Heartbeat{
+		SourceInstance: "ha-1",
+		ObservedAt:     t2,
+	}, tolerance)
+	if err != nil {
+		t.Fatalf("Heartbeat 3 error: %v", err)
+	}
+	if res3.Status != "data_gap" || !res3.GapDetected {
+		t.Fatalf("Heartbeat 3 got %+v, want data_gap, gap_detected=true", res3)
+	}
+
+	// 4. Heartbeat 60s after gap recovery (healthy continuation)
+	t3 := t2.Add(60 * time.Second)
+	res4, err := st.IngestHeartbeat(ctx, Heartbeat{
+		SourceInstance: "ha-1",
+		ObservedAt:     t3,
+	}, tolerance)
+	if err != nil {
+		t.Fatalf("Heartbeat 4 error: %v", err)
+	}
+	if res4.Status != "healthy" || res4.GapDetected {
+		t.Fatalf("Heartbeat 4 got %+v, want healthy, gap_detected=false", res4)
+	}
+
+	// Verify intervals count: should have 2 healthy intervals and 1 data_gap interval
+	rows, err := st.DB().Query("SELECT status, started_at_ms, ended_at_ms FROM heartbeat_intervals WHERE source_instance = 'ha-1' ORDER BY started_at_ms ASC")
+	if err != nil {
+		t.Fatalf("query heartbeat_intervals: %v", err)
+	}
+	defer rows.Close()
+
+	type intervalRow struct {
+		status  string
+		started int64
+		ended   int64
+	}
+	var intervals []intervalRow
+	for rows.Next() {
+		var r intervalRow
+		if err := rows.Scan(&r.status, &r.started, &r.ended); err != nil {
+			t.Fatalf("scan interval: %v", err)
+		}
+		intervals = append(intervals, r)
+	}
+	if len(intervals) != 3 {
+		t.Fatalf("intervals count = %d, want 3; %+v", len(intervals), intervals)
+	}
+	if intervals[0].status != "healthy" || intervals[1].status != "data_gap" || intervals[2].status != "healthy" {
+		t.Fatalf("unexpected interval statuses: %+v", intervals)
 	}
 }
 
