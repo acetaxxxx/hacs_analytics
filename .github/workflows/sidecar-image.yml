@@ -40,5 +40,6 @@ jobs:
         with:
           context: services/analyticsd
           file: services/analyticsd/Dockerfile
+          platforms: linux/amd64
           push: ${{ github.event_name == 'push' && github.ref_type == 'branch' }}
           tags: ${{ steps.image.outputs.image_name }}:${{ steps.image.outputs.sha_tag }}

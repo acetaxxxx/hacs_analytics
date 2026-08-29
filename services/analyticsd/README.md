@@ -46,8 +46,8 @@ Gemini key outside the image, using environment variables or Docker secrets.
 
 ## CI images
 
-Every branch push that changes the sidecar builds and publishes an image to
-GHCR using the final six characters of the commit SHA:
+Every branch push builds and publishes an image to
+GHCR for `linux/amd64`, using the final six characters of the commit SHA:
 
 ```text
 ghcr.io/acetaxxxx/homekeeper-analyticsd:<sha6>
