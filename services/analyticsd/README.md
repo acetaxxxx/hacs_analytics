@@ -43,3 +43,16 @@ docker run --rm -p 8080:8080 \
 
 The container uses a persistent volume for SQLite. Keep the shared token and
 Gemini key outside the image, using environment variables or Docker secrets.
+
+## CI images
+
+Every branch push that changes the sidecar builds and publishes an image to
+GHCR using the final six characters of the commit SHA:
+
+```text
+ghcr.io/acetaxxxx/homekeeper-analyticsd:<sha6>
+```
+
+Pull requests build the image for verification but do not publish it. When a
+Git tag is pushed, the release workflow pulls the image for that commit's
+`<sha6>` tag and publishes the same image under the sanitized Git tag name.

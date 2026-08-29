@@ -49,7 +49,14 @@ The config flow asks for:
 
 ### External sidecar
 
-Build and run the sidecar separately; HACS does not install or supervise it:
+Run the sidecar separately; HACS does not install or supervise it. For a
+published release, pull the image produced from the Git tag:
+
+```sh
+docker pull ghcr.io/acetaxxxx/homekeeper-analyticsd:<git-tag>
+```
+
+To build manually instead:
 
 ```sh
 cd services/analyticsd

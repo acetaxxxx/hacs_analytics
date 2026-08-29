@@ -1,0 +1,64 @@
+name: Sidecar release image
+
+on:
+  push:
+    tags:
+      - "**"
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  promote-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: image
+        name: Compute source and release tags
+        shell: bash
+        run: |
+          sha_tag="${GITHUB_SHA: -6}"
+          release_tag="${GITHUB_REF_NAME//\//-}"
+          if [[ ! "$sha_tag" =~ ^[0-9a-f]{6}$ ]]; then
+            echo "GITHUB_SHA did not produce a six-character hexadecimal tag" >&2
+            exit 1
+          fi
+          if [[ ! "$release_tag" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
+            echo "Git tag cannot be used as a Docker tag: $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+          echo "sha_tag=$sha_tag" >> "$GITHUB_OUTPUT"
+          echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
+          echo "image_name=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/homekeeper-analyticsd" >> "$GITHUB_OUTPUT"
+      - name: Pull commit image
+        env:
+          IMAGE_NAME: ${{ steps.image.outputs.image_name }}
+          SHA_TAG: ${{ steps.image.outputs.sha_tag }}
+        shell: bash
+        run: |
+          source_image="${IMAGE_NAME}:${SHA_TAG}"
+          for attempt in $(seq 1 30); do
+            if docker pull "$source_image"; then
+              exit 0
+            fi
+            echo "Commit image is not available yet (attempt $attempt/30); retrying..."
+            sleep 10
+          done
+          echo "Unable to pull commit image: $source_image" >&2
+          exit 1
+      - name: Retag and publish release image
+        env:
+          IMAGE_NAME: ${{ steps.image.outputs.image_name }}
+          SHA_TAG: ${{ steps.image.outputs.sha_tag }}
+          RELEASE_TAG: ${{ steps.image.outputs.release_tag }}
+        shell: bash
+        run: |
+          source_image="${IMAGE_NAME}:${SHA_TAG}"
+          release_image="${IMAGE_NAME}:${RELEASE_TAG}"
+          docker tag "$source_image" "$release_image"
+          docker push "$release_image"
