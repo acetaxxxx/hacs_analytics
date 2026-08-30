@@ -37,12 +37,13 @@ docker run --rm -p 8080:8080 \
   -e HOMEKEEPER_SHARED_TOKEN=change-me \
   -e GEMINI_API_KEY=replace-me \
   -e HOMEKEEPER_TIMEZONE=Asia/Taipei \
-  -v homekeeper-data:/data \
+  -v ./data:/data \
   homekeeper-analyticsd
 ```
 
-The container uses a persistent volume for SQLite. Keep the shared token and
-Gemini key outside the image, using environment variables or Docker secrets.
+The SQLite database is visible on the host at `./data/homekeeper.db`. Keep the
+shared token and Gemini key outside the image, using environment variables or
+Docker secrets.
 
 ## Docker Compose
 
@@ -58,9 +59,14 @@ curl http://localhost:8080/api/v1/health/live
 
 The Compose service always pulls the image from
 `ghcr.io/acetaxxxx/homekeeper-analyticsd:<tag>`, persists SQLite data in the
-`homekeeper-data` volume, and restarts automatically unless stopped. CI
-publishes seven-character commit tags for branch pushes and release tags for
-versioned releases.
+host directory `${HOMEKEEPER_DATA_DIR:-./data}`, and restarts automatically
+unless stopped. Set `HOMEKEEPER_DATA_DIR` in `.env` to an absolute directory
+such as `C:/homekeeper/data`. CI publishes seven-character commit tags for
+branch pushes and release tags for versioned releases.
+
+If you previously used the named `homekeeper-data` volume, switching to this
+bind mount does not copy its contents; the new host directory starts with a
+new database unless you migrate the file yourself.
 
 ## CI images
 
