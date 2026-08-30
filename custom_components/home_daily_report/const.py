@@ -16,6 +16,11 @@ CONF_MAX_DAYS = "max_days"
 CONF_ENABLE_AI_SUMMARY = "enable_ai_summary"
 CONF_AI_TASK_ENTITY_ID = "ai_task_entity_id"
 CONF_NOTIFY_SERVICE = "notify_service"
+CONF_SIDECAR_URL = "sidecar_url"
+CONF_SIDECAR_TOKEN = "sidecar_token"
+CONF_SIDECAR_TIMEOUT = "sidecar_timeout"
+CONF_GEMINI_MODEL = "gemini_model"
+CONF_PROFILE_OVERRIDES = "profile_overrides"
 
 DEFAULT_INCLUDED_DOMAINS = [
     "sensor",
@@ -28,11 +33,29 @@ DEFAULT_INCLUDED_DOMAINS = [
     "select",
     "input_boolean",
     "input_select",
+    "button",
+    "number",
+    "device_tracker",
+    "person",
+    "alarm_control_panel",
+    "automation",
+    "fan",
+    "humidifier",
+    "media_player",
+    "remote",
+    "scene",
+    "script",
+    "vacuum",
+    "water_heater",
+    "weather",
 ]
-DEFAULT_REPORT_TIME = "03:00"
+DEFAULT_REPORT_TIME = "08:00"
 DEFAULT_MAX_DAYS = 35
 DEFAULT_ENABLE_AI_SUMMARY = True
 DEFAULT_NOTIFY_SERVICE = "persistent_notification.create"
+DEFAULT_SIDECAR_URL = ""
+DEFAULT_SIDECAR_TIMEOUT = 10
+DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
 
 STORE_VERSION = 1
 STORE_KEY = f"{DOMAIN}.rollups"

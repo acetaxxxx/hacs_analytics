@@ -1,6 +1,6 @@
 generate_report:
   name: Generate report
-  description: Generate a compact daily rollup and optionally send it to AI Task.
+  description: Generate a daily report through the external Gemini sidecar and optionally notify.
   fields:
     date:
       name: Date
@@ -9,8 +9,8 @@ generate_report:
       selector:
         text:
     use_ai:
-      name: Use AI Task
-      description: Send the rollup to ai_task.generate_data.
+      name: Use Gemini AI
+      description: Send the bounded report input to the configured Gemini sidecar.
       default: true
       selector:
         boolean:

@@ -1,0 +1,4 @@
+.git
+.gitignore
+**/*_test.go
+README.md

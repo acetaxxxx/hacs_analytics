@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/homekeeper/contracts/health.schema.json",
+  "title": "Homekeeper sidecar health",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "database", "gemini_configured"],
+  "properties": {
+    "status": {"type": "string", "enum": ["ok", "not_ready"]},
+    "database": {"type": "string", "enum": ["ready", "unavailable"]},
+    "gemini_configured": {"type": "boolean"}
+  }
+}

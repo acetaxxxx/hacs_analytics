@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from datetime import date, datetime, timedelta
 import fnmatch
@@ -9,6 +10,7 @@ import json
 import logging
 import math
 from typing import Any
+import uuid
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
@@ -20,35 +22,53 @@ from homeassistant.const import (
 )
 from homeassistant.core import Event, HomeAssistant, State, callback
 from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers.event import async_call_later, async_track_time_change
+from homeassistant.helpers.event import (
+    async_call_later,
+    async_track_time_change,
+    async_track_time_interval,
+)
 from homeassistant.helpers.storage import Store
 import homeassistant.util.dt as dt_util
 
 from .const import (
     CONF_AI_TASK_ENTITY_ID,
     CONF_ENABLE_AI_SUMMARY,
+    CONF_GEMINI_MODEL,
     CONF_EXCLUDED_ENTITY_GLOBS,
     CONF_INCLUDED_DEVICE_IDS,
     CONF_INCLUDED_DOMAINS,
     CONF_INCLUDED_ENTITY_IDS,
     CONF_MAX_DAYS,
     CONF_NOTIFY_SERVICE,
+    CONF_PROFILE_OVERRIDES,
     CONF_REPORT_TIME,
     DEFAULT_ENABLE_AI_SUMMARY,
     DEFAULT_INCLUDED_DOMAINS,
     DEFAULT_MAX_DAYS,
     DEFAULT_NOTIFY_SERVICE,
     DEFAULT_REPORT_TIME,
+    CONF_SIDECAR_URL,
     DOMAIN,
     EVENT_REPORT_READY,
     NAME,
     STORE_KEY,
     STORE_VERSION,
 )
+from .sidecar import SidecarClient, SidecarError
 
 _LOGGER = logging.getLogger(__name__)
 
 UNKNOWN_STATES = {STATE_UNKNOWN, STATE_UNAVAILABLE}
+SENSITIVE_ATTRIBUTE_NAMES = {
+    "access_token",
+    "api_key",
+    "latitude",
+    "longitude",
+    "media_content_id",
+    "password",
+    "secret",
+    "token",
+}
 NUMERIC_JUMP_THRESHOLDS = {
     "temperature": 3.0,
     "humidity": 10.0,
@@ -68,7 +88,23 @@ class HomeDailyReportManager:
         self._unsubscribers: list[Callable[[], None]] = []
         self._listeners: list[Callable[[], None]] = []
         self._save_unsub: Callable[[], None] | None = None
+        self._flush_unsub: Callable[[], None] | None = None
+        self._snapshot_unsub: Callable[[], None] | None = None
+        self._pending_events: list[dict[str, Any]] = []
         self._entity_registry: er.EntityRegistry | None = None
+        self._sidecar_client: SidecarClient | None = None
+        self._sidecar_configured = bool(str(self.options.get(CONF_SIDECAR_URL, "")).strip())
+        self._sidecar_probe_task: asyncio.Task[None] | None = None
+        self._sidecar_heartbeat_task: asyncio.Task[None] | None = None
+        self._sidecar_stop = asyncio.Event()
+        self._sidecar_status = "unconfigured"
+        self._sidecar_error: str | None = None
+        self._last_snapshot_at: dict[str, datetime] = {}
+        self._risk_cooldowns: dict[str, datetime] = {}
+        self._flush_lock = asyncio.Lock()
+        self._flush_tasks: set[asyncio.Task[None]] = set()
+        self._report_tasks: set[asyncio.Task[None]] = set()
+        self._report_poll_tasks: dict[str, asyncio.Task[None]] = {}
 
     @property
     def options(self) -> dict[str, Any]:
@@ -95,13 +131,24 @@ class HomeDailyReportManager:
         report = self.last_report
         if not report:
             return 0
-        return len(report.get("anomalies", []))
+        return len(report.get("anomalies", [])) + len(report.get("risks", []))
+
+    @property
+    def sidecar_status(self) -> str:
+        """Return sidecar connectivity status for the status sensor."""
+        return self._sidecar_status
+
+    @property
+    def sidecar_error(self) -> str | None:
+        """Return the last safe sidecar error code, if any."""
+        return self._sidecar_error
 
     async def async_load(self) -> None:
         """Load persisted rollups."""
-        stored = await self._store.async_load()
-        if stored:
-            self._data = stored
+        if not self._sidecar_configured:
+            stored = await self._store.async_load()
+            if stored:
+                self._data = stored
         self._data.setdefault("days", {})
         self._data.setdefault("last_report", None)
         self._prune_days()
@@ -109,23 +156,149 @@ class HomeDailyReportManager:
     async def async_start(self) -> None:
         """Start collecting data."""
         self._entity_registry = er.async_get(self.hass)
+        self._sidecar_client = SidecarClient(self.hass, self.options)
+        if self._sidecar_client.configured:
+            self._sidecar_status = "degraded"
+            self._sidecar_probe_task = self.hass.async_create_task(
+                self._async_sidecar_probe_loop()
+            )
+            self._sidecar_heartbeat_task = self.hass.async_create_task(
+                self._async_heartbeat_loop()
+            )
         self._unsubscribers.append(
             self.hass.bus.async_listen(EVENT_STATE_CHANGED, self._handle_state_changed)
         )
         self._schedule_daily_report()
         self._record_current_snapshot()
-        self._schedule_save()
+        self._snapshot_unsub = async_track_time_interval(
+            self.hass, self._handle_periodic_snapshot, timedelta(minutes=5)
+        )
+        if not self._sidecar_configured:
+            self._schedule_save()
         self._notify_listeners()
 
     async def async_unload(self) -> None:
         """Stop collecting data and persist the latest rollup."""
+        if self._sidecar_probe_task is not None:
+            self._sidecar_stop.set()
+            self._sidecar_probe_task.cancel()
+            try:
+                await self._sidecar_probe_task
+            except asyncio.CancelledError:
+                pass
+            self._sidecar_probe_task = None
+        if self._sidecar_heartbeat_task is not None:
+            self._sidecar_stop.set()
+            self._sidecar_heartbeat_task.cancel()
+            try:
+                await self._sidecar_heartbeat_task
+            except asyncio.CancelledError:
+                pass
+            self._sidecar_heartbeat_task = None
         for unsub in self._unsubscribers:
             unsub()
         self._unsubscribers.clear()
         if self._save_unsub is not None:
             self._save_unsub()
             self._save_unsub = None
-        await self.async_save()
+        if self._flush_unsub is not None:
+            self._flush_unsub()
+            self._flush_unsub = None
+        if self._snapshot_unsub is not None:
+            self._snapshot_unsub()
+            self._snapshot_unsub = None
+        for task in tuple(self._flush_tasks):
+            task.cancel()
+        if self._flush_tasks:
+            await asyncio.gather(*self._flush_tasks, return_exceptions=True)
+        for task in tuple(self._report_tasks):
+            task.cancel()
+        if self._report_tasks:
+            await asyncio.gather(*self._report_tasks, return_exceptions=True)
+        self._report_poll_tasks.clear()
+        self._pending_events.clear()
+        if not self._sidecar_configured:
+            await self.async_save()
+
+    async def _async_sidecar_probe_loop(self) -> None:
+        """Probe the sidecar without making HA setup depend on it."""
+        while not self._sidecar_stop.is_set():
+            await self._async_probe_sidecar()
+            try:
+                await asyncio.wait_for(self._sidecar_stop.wait(), timeout=60)
+            except asyncio.TimeoutError:
+                continue
+
+    async def _async_probe_sidecar(self) -> None:
+        """Update sidecar status from one best-effort health request."""
+        if self._sidecar_client is None or not self._sidecar_client.configured:
+            return
+        try:
+            health = await self._sidecar_client.async_health()
+        except SidecarError as err:
+            self._set_sidecar_status("degraded", err.code)
+            return
+
+        if health.get("status") == "ok" and health.get("database") == "ready":
+            self._set_sidecar_status("healthy", None)
+        else:
+            self._set_sidecar_status("degraded", "not_ready")
+
+    async def _async_heartbeat_loop(self) -> None:
+        """Send periodic heartbeats to the sidecar every 60 seconds."""
+        while not self._sidecar_stop.is_set():
+            await self._async_send_heartbeat()
+            try:
+                await asyncio.wait_for(self._sidecar_stop.wait(), timeout=60)
+            except asyncio.TimeoutError:
+                continue
+
+    async def _async_send_heartbeat(self) -> None:
+        """Send one heartbeat to the sidecar."""
+        if self._sidecar_client is None or not self._sidecar_client.configured:
+            return
+        source_instance = getattr(self.entry, "entry_id", "homeassistant") or "homeassistant"
+        payload = {
+            "source_instance": source_instance,
+            "observed_at": dt_util.utcnow().isoformat(),
+        }
+        try:
+            await self._sidecar_client.async_ingest_heartbeat(payload)
+            self._set_sidecar_status("healthy", None)
+        except SidecarError as err:
+            self._set_sidecar_status("degraded", err.code)
+        except Exception as err:
+            _LOGGER.debug("Error sending sidecar heartbeat: %s", err)
+            self._set_sidecar_status("degraded", "connection")
+
+    def _set_sidecar_status(self, status: str, error: str | None) -> None:
+        """Update sidecar state and refresh status entities when it changes."""
+        if self._sidecar_status == status and self._sidecar_error == error:
+            return
+        self._sidecar_status = status
+        self._sidecar_error = error
+        self._notify_listeners()
+
+    def _profile_override(self, entity_id: str) -> dict[str, Any]:
+        """Return the small allowlisted profile metadata for one entity."""
+        overrides = self._option(CONF_PROFILE_OVERRIDES, {})
+        if not isinstance(overrides, dict):
+            return {}
+        value = overrides.get(entity_id.lower())
+        if not isinstance(value, dict):
+            return {}
+        return {
+            key: value[key]
+            for key in (
+                "profile_kind",
+                "profile_version",
+                "snapshot_interval",
+                "numeric_threshold",
+                "allowed_states",
+                "safe_metadata",
+            )
+            if key in value
+        }
 
     def async_add_listener(self, listener: Callable[[], None]) -> Callable[[], None]:
         """Subscribe to manager updates."""
@@ -139,6 +312,8 @@ class HomeDailyReportManager:
 
     async def async_save(self) -> None:
         """Persist rollups."""
+        if self._sidecar_configured:
+            return
         self._prune_days()
         await self._store.async_save(self._data)
 
@@ -148,8 +323,14 @@ class HomeDailyReportManager:
         use_ai: bool = True,
         notify: bool = True,
     ) -> dict[str, Any]:
-        """Generate a daily report and optionally ask AI Task to summarize it."""
+        """Generate a daily report through the external Gemini sidecar."""
         target_date = report_date or self._default_report_date()
+        if self._sidecar_client is not None and self._sidecar_client.configured:
+            return await self._async_generate_sidecar_report(
+                target_date,
+                notify,
+                use_ai and self._option(CONF_ENABLE_AI_SUMMARY, DEFAULT_ENABLE_AI_SUMMARY),
+            )
         report = self._build_report(target_date)
 
         if use_ai and self._option(CONF_ENABLE_AI_SUMMARY, DEFAULT_ENABLE_AI_SUMMARY):
@@ -165,6 +346,86 @@ class HomeDailyReportManager:
 
         return report
 
+    async def _async_generate_sidecar_report(
+        self, target_date: str, notify: bool, use_ai: bool = True
+    ) -> dict[str, Any]:
+        """Request and bounded-poll one idempotent sidecar report."""
+        assert self._sidecar_client is not None
+        model = str(self._option(CONF_GEMINI_MODEL, "gemini-2.5-flash"))
+        try:
+            await self._sidecar_client.async_request_report(target_date, model, use_ai)
+        except SidecarError as err:
+            self._set_sidecar_status("degraded", err.code)
+            return {
+                "report_date": target_date,
+                "status": "sidecar_unavailable",
+                "error_code": err.code,
+            }
+
+        # The sidecar worker is intentionally low-frequency on the old
+        # Windows host. Keep the HA request bounded, but allow enough time
+        # for its 30-second worker tick plus one Gemini call.
+        for _ in range(90):
+            try:
+                result = await self._sidecar_client.async_get_report_result(target_date)
+            except SidecarError as err:
+                self._set_sidecar_status("degraded", err.code)
+                await asyncio.sleep(2)
+                continue
+            if result is not None:
+                await self._accept_sidecar_report(result, notify)
+                return result
+            await asyncio.sleep(2)
+        self._schedule_report_poll(target_date, notify)
+        return {"report_date": target_date, "status": "pending"}
+
+    async def _accept_sidecar_report(
+        self, result: dict[str, Any], notify: bool
+    ) -> None:
+        """Publish one completed sidecar result to HA and notifications."""
+        self._set_sidecar_status("healthy", None)
+        self._data["last_report"] = result
+        if not self._sidecar_configured:
+            await self.async_save()
+        self._notify_listeners()
+        self.hass.bus.async_fire(EVENT_REPORT_READY, {"report": result})
+        if notify:
+            await self._async_notify(result)
+
+    def _schedule_report_poll(self, report_date: str, notify: bool) -> None:
+        """Continue polling a pending report across delayed worker retries."""
+        current = self._report_poll_tasks.get(report_date)
+        if current is not None and not current.done():
+            return
+        task = self.hass.async_create_task(
+            self._async_poll_report_until_ready(report_date, notify)
+        )
+        self._report_poll_tasks[report_date] = task
+        self._report_tasks.add(task)
+
+        def _done(completed: asyncio.Task[None]) -> None:
+            self._report_tasks.discard(completed)
+            if self._report_poll_tasks.get(report_date) is completed:
+                self._report_poll_tasks.pop(report_date, None)
+
+        task.add_done_callback(_done)
+
+    async def _async_poll_report_until_ready(
+        self, report_date: str, notify: bool
+    ) -> None:
+        """Poll for up to 36 hours so scheduled Gemini retries can finish."""
+        assert self._sidecar_client is not None
+        for _ in range(36 * 60):
+            await asyncio.sleep(60)
+            try:
+                result = await self._sidecar_client.async_get_report_result(report_date)
+            except SidecarError as err:
+                self._set_sidecar_status("degraded", err.code)
+                continue
+            if result is not None:
+                await self._accept_sidecar_report(result, notify)
+                return
+
     @callback
     def _handle_state_changed(self, event: Event) -> None:
         """Handle a Home Assistant state change event."""
@@ -178,7 +439,10 @@ class HomeDailyReportManager:
             return
 
         self._record_state(new_state, old_state=old_state, is_snapshot=False)
-        self._schedule_save()
+        if old_state is not None and old_state.state != new_state.state:
+            self._schedule_immediate_risk(new_state)
+        if not self._sidecar_configured:
+            self._schedule_save()
         self._notify_listeners()
 
     def _record_current_snapshot(self) -> None:
@@ -187,6 +451,28 @@ class HomeDailyReportManager:
             if self._should_track_entity(state.entity_id):
                 self._record_state(state, old_state=None, is_snapshot=True)
 
+    @callback
+    def _handle_periodic_snapshot(self, _now: datetime) -> None:
+        """Sample numeric entities periodically for slow-changing sensors."""
+        now = dt_util.utcnow()
+        for state in self.hass.states.async_all():
+            if not self._should_track_entity(state.entity_id) or _as_float(state.state) is None:
+                continue
+            override = self._profile_override(state.entity_id)
+            interval = override.get("snapshot_interval", 300)
+            try:
+                interval_seconds = int(interval)
+            except (TypeError, ValueError):
+                interval_seconds = 300
+            if interval_seconds <= 0:
+                interval_seconds = 300
+            last_snapshot = self._last_snapshot_at.get(state.entity_id)
+            if last_snapshot is not None and now - last_snapshot < timedelta(seconds=interval_seconds):
+                continue
+            self._record_state(state, old_state=None, is_snapshot=True)
+        if not self._sidecar_configured:
+            self._schedule_save()
+
     def _record_state(
         self,
         new_state: State,
@@ -194,6 +480,9 @@ class HomeDailyReportManager:
         is_snapshot: bool,
     ) -> None:
         """Record one state sample into today's rollup."""
+        if self._sidecar_configured:
+            self._queue_sidecar_state(new_state, old_state, is_snapshot)
+            return
         day = self._get_day(self._today())
         entity = self._get_entity_rollup(day, new_state)
 
@@ -226,6 +515,130 @@ class HomeDailyReportManager:
         if not is_snapshot:
             day["change_events"] += 1
         day["updated_at"] = now_iso
+
+    def _queue_sidecar_state(
+        self, new_state: State, old_state: State | None, is_snapshot: bool
+    ) -> None:
+        """Create a redacted sidecar observation without local persistence."""
+        if self._sidecar_client is None or not self._sidecar_client.configured:
+            return
+        now_iso = dt_util.utcnow().isoformat()
+        numeric_value = _as_float(new_state.state)
+        metadata: dict[str, Any] = {}
+        device_class = new_state.attributes.get(ATTR_DEVICE_CLASS)
+        if device_class is not None:
+            metadata["device_class"] = str(device_class)
+        friendly_name = new_state.attributes.get(ATTR_FRIENDLY_NAME, new_state.name)
+        if friendly_name is not None:
+            metadata["friendly_name"] = str(friendly_name)
+        override = self._profile_override(new_state.entity_id)
+        if override:
+            metadata.update({
+                key: override[key]
+                for key in ("profile_kind", "profile_version", "snapshot_interval", "numeric_threshold")
+                if key in override
+            })
+            for key in override.get("safe_metadata", [])[:24]:
+                value = _safe_attribute_value(key, new_state.attributes.get(key))
+                if value is not None:
+                    metadata[key] = value
+        profile_version = int(override.get("profile_version", 1)) if override else 1
+        if is_snapshot:
+            self._last_snapshot_at[new_state.entity_id] = dt_util.utcnow()
+        self._queue_sidecar_event({
+            "event_id": uuid.uuid4().hex,
+            "observed_at": now_iso,
+            "entity_id": new_state.entity_id,
+            "kind": "snapshot" if is_snapshot or old_state is None or old_state.state == new_state.state else "state_change",
+            "old_state": old_state.state if old_state is not None else None,
+            "new_state": new_state.state,
+            "numeric_value": numeric_value,
+            "unit": str(new_state.attributes["unit_of_measurement"]) if new_state.attributes.get("unit_of_measurement") is not None else None,
+            "metadata": metadata,
+            "profile_version": profile_version,
+        })
+
+    def _queue_sidecar_event(self, event_dto: dict[str, Any]) -> None:
+        """Queue an event for batch delivery to the sidecar."""
+        if len(self._pending_events) >= 500:
+            self._pending_events.pop(0)
+        self._pending_events.append(event_dto)
+
+        if len(self._pending_events) >= 100:
+            if self._flush_unsub is not None:
+                self._flush_unsub()
+                self._flush_unsub = None
+            self._create_flush_task()
+        elif self._flush_unsub is None:
+            self._flush_unsub = async_call_later(self.hass, 30, self._handle_flush_later)
+
+    @callback
+    def _handle_flush_later(self, _now: datetime) -> None:
+        """Flush queued events after debounce delay."""
+        self._flush_unsub = None
+        self._create_flush_task()
+
+    def _create_flush_task(self, retry_attempt: int = 0) -> None:
+        """Track a flush task so reload/unload cannot leave it running."""
+        task = self.hass.async_create_task(self._async_flush_events(retry_attempt))
+        self._flush_tasks.add(task)
+        task.add_done_callback(self._flush_tasks.discard)
+
+    async def _async_flush_events(self, retry_attempt: int = 0) -> None:
+        """Flush up to 100 queued events to the sidecar."""
+        async with self._flush_lock:
+            if not self._pending_events or self._sidecar_client is None or not self._sidecar_client.configured:
+                return
+
+            batch_events = self._pending_events[:100]
+            self._pending_events = self._pending_events[100:]
+
+            source_instance = getattr(self.entry, "entry_id", "homeassistant") or "homeassistant"
+            batch = {
+                "source_instance": source_instance,
+                "sent_at": dt_util.utcnow().isoformat(),
+                "events": batch_events,
+            }
+
+            try:
+                await self._sidecar_client.async_ingest_events(batch)
+                self._set_sidecar_status("healthy", None)
+            except SidecarError as err:
+                self._set_sidecar_status("degraded", err.code)
+                if retry_attempt < 3 and err.code in {
+                    "timeout",
+                    "connection",
+                    "busy",
+                    "unavailable",
+                }:
+                    self._pending_events = (batch_events + self._pending_events)[:500]
+                    self._schedule_sidecar_retry(retry_attempt + 1)
+                    return
+            except Exception as err:
+                _LOGGER.debug("Error flushing sidecar events: %s", err)
+                self._set_sidecar_status("degraded", "connection")
+                if retry_attempt < 3:
+                    self._pending_events = (batch_events + self._pending_events)[:500]
+                    self._schedule_sidecar_retry(retry_attempt + 1)
+                    return
+
+            if len(self._pending_events) >= 100:
+                self._create_flush_task()
+            elif self._pending_events and self._flush_unsub is None:
+                self._flush_unsub = async_call_later(self.hass, 30, self._handle_flush_later)
+
+    def _schedule_sidecar_retry(self, retry_attempt: int) -> None:
+        """Retry a failed in-memory batch a bounded number of times."""
+        if self._flush_unsub is not None:
+            self._flush_unsub()
+        delay = (5, 15, 60)[min(retry_attempt - 1, 2)]
+
+        @callback
+        def _retry(_now: datetime) -> None:
+            self._flush_unsub = None
+            self._create_flush_task(retry_attempt)
+
+        self._flush_unsub = async_call_later(self.hass, delay, _retry)
 
     def _record_numeric_sample(
         self,
@@ -318,7 +731,7 @@ class HomeDailyReportManager:
         return report
 
     async def _async_generate_ai_summary(self, report: dict[str, Any]) -> dict[str, Any]:
-        """Generate AI report text through Home Assistant AI Task."""
+        """Generate a legacy local report through Home Assistant AI Task."""
         service_data: dict[str, Any] = {
             "task_name": f"home_daily_report_{report['date']}",
             "instructions": (
@@ -382,25 +795,70 @@ class HomeDailyReportManager:
 
         domain, service = service_name.split(".", 1)
         message = self._notification_message(report)
-        service_data: dict[str, Any] = {
-            "title": "Home Daily Report",
-            "message": message,
-        }
-        if service_name == DEFAULT_NOTIFY_SERVICE:
-            service_data["notification_id"] = f"{DOMAIN}_{report['date']}"
+        report_date = report.get("date", report.get("report_date", self._today()))
+        chunks = _split_message(message)
+        for index, chunk in enumerate(chunks, start=1):
+            service_data: dict[str, Any] = {
+                "title": "Home Daily Report",
+                "message": chunk,
+            }
+            if service_name == DEFAULT_NOTIFY_SERVICE:
+                suffix = f"_{index}" if len(chunks) > 1 else ""
+                service_data["notification_id"] = f"{DOMAIN}_{report_date}{suffix}"
 
-        try:
-            await self.hass.services.async_call(
-                domain,
-                service,
-                service_data,
-                blocking=False,
-            )
-        except Exception as err:  # noqa: BLE001
-            _LOGGER.warning("Failed to send report notification: %s", err)
+            try:
+                await self.hass.services.async_call(
+                    domain,
+                    service,
+                    service_data,
+                    blocking=False,
+                )
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.warning("Failed to send report notification: %s", err)
+
+    def _schedule_immediate_risk(self, state: State) -> None:
+        """Notify Telegram about a high-risk state with a local cooldown."""
+        device_class = str(state.attributes.get(ATTR_DEVICE_CLASS, "")).lower()
+        state_value = state.state.lower()
+        if device_class not in {"smoke", "gas", "moisture", "leak", "door", "window", "lock", "safety"}:
+            return
+        if state_value not in {"on", "open", "detected", "triggered", "unlocked"}:
+            return
+        key = f"{state.entity_id}:{state_value}"
+        now = dt_util.utcnow()
+        if now < self._risk_cooldowns.get(key, datetime.min.replace(tzinfo=now.tzinfo)):
+            return
+        self._risk_cooldowns[key] = now + timedelta(hours=1)
+        self.hass.async_create_task(self._async_notify_immediate_risk(state))
+
+    async def _async_notify_immediate_risk(self, state: State) -> None:
+        """Send an advisory high-risk notification without executing actions."""
+        name = state.attributes.get(ATTR_FRIENDLY_NAME, state.name)
+        await self._async_notify({
+            "report_date": self._today(),
+            "summary": f"高風險狀態提醒：{name} 目前為 {state.state}。請人工確認；系統不會自動執行任何動作。",
+            "risks": [{"title": f"{name} 狀態需要確認"}],
+            "suggestions": [],
+            "data_quality": {"coverage": 1, "data_gaps": []},
+        })
 
     def _notification_message(self, report: dict[str, Any]) -> str:
         """Build a human-readable notification message."""
+        if isinstance(report.get("summary"), str) and "report_date" in report:
+            lines = [report.get("summary", "")]
+            quality = report.get("data_quality") or {}
+            if quality:
+                lines.append(
+                    f"資料涵蓋率：{quality.get('coverage', 0):.0%}；"
+                    f"資料缺口：{len(quality.get('data_gaps', []))}"
+                )
+            risks = report.get("risks", [])
+            if risks:
+                lines.append("風險：" + "、".join(str(item.get("title", "")) for item in risks))
+            suggestions = report.get("suggestions", [])
+            if suggestions:
+                lines.append("建議：" + "、".join(str(item.get("title", "")) for item in suggestions))
+            return "\n\n".join(line for line in lines if line)
         ai = report.get("ai", {})
         if ai.get("ok") and isinstance(ai.get("response"), dict):
             data = ai["response"].get("data")
@@ -567,7 +1025,9 @@ class HomeDailyReportManager:
     @callback
     def _handle_daily_report_time(self, _now: datetime) -> None:
         """Generate the scheduled report."""
-        self.hass.async_create_task(self.async_generate_report())
+        task = self.hass.async_create_task(self.async_generate_report())
+        self._report_tasks.add(task)
+        task.add_done_callback(self._report_tasks.discard)
 
     def _schedule_save(self) -> None:
         """Debounce storage writes."""
@@ -710,6 +1170,19 @@ def _as_float(value: str) -> float | None:
     return number
 
 
+def _safe_attribute_value(name: str, value: Any) -> str | float | int | bool | None:
+    """Return one explicitly opted-in scalar attribute, excluding secrets."""
+    if not isinstance(name, str) or name.lower() in SENSITIVE_ATTRIBUTE_NAMES:
+        return None
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if isinstance(value, (str, int, float, bool)) and not isinstance(value, complex):
+        if isinstance(value, str) and len(value) > 4096:
+            return value[:4096]
+        return value
+    return None
+
+
 def _round(value: float | int | None, digits: int = 2) -> float | None:
     """Round a number for JSON output."""
     if value is None:
@@ -734,3 +1207,26 @@ def _date_range(end_date: str, days: int) -> list[str]:
         (end - timedelta(days=offset)).isoformat()
         for offset in range(days - 1, -1, -1)
     ]
+
+
+def _split_message(message: str, max_length: int = 4000) -> list[str]:
+    """Split long notification text without silently dropping any content."""
+    if len(message) <= max_length:
+        return [message]
+    chunks: list[str] = []
+    current = ""
+    for line in message.splitlines(keepends=True):
+        if len(line) > max_length:
+            if current:
+                chunks.append(current)
+                current = ""
+            for start in range(0, len(line), max_length):
+                chunks.append(line[start : start + max_length])
+            continue
+        if current and len(current) + len(line) > max_length:
+            chunks.append(current)
+            current = ""
+        current += line
+    if current:
+        chunks.append(current)
+    return chunks or [message]
