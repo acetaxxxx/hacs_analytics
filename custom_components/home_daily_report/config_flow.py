@@ -16,6 +16,8 @@ from homeassistant.helpers import selector
 
 from .const import (
     CONF_GEMINI_MODEL,
+    CONF_EXCLUDED_DEVICE_IDS,
+    CONF_EXCLUDED_ENTITY_IDS,
     CONF_PROFILE_OVERRIDES,
     CONF_EXCLUDED_ENTITY_GLOBS,
     CONF_INCLUDED_DEVICE_IDS,
@@ -221,6 +223,12 @@ def _normalize_user_input(user_input: dict[str, Any]) -> dict[str, Any]:
         CONF_INCLUDED_ENTITY_IDS: _normalize_list(
             user_input.get(CONF_INCLUDED_ENTITY_IDS)
         ),
+        CONF_EXCLUDED_DEVICE_IDS: _normalize_list(
+            user_input.get(CONF_EXCLUDED_DEVICE_IDS), lowercase=False
+        ),
+        CONF_EXCLUDED_ENTITY_IDS: _normalize_list(
+            user_input.get(CONF_EXCLUDED_ENTITY_IDS)
+        ),
         CONF_EXCLUDED_ENTITY_GLOBS: _csv_to_list(
             user_input.get(CONF_EXCLUDED_ENTITY_GLOBS, "")
         ),
@@ -270,6 +278,18 @@ def _schema(defaults: dict[str, Any]) -> vol.Schema:
             vol.Optional(
                 CONF_INCLUDED_ENTITY_IDS,
                 default=defaults.get(CONF_INCLUDED_ENTITY_IDS, []),
+            ): selector.EntitySelector(
+                selector.EntitySelectorConfig(multiple=True)
+            ),
+            vol.Optional(
+                CONF_EXCLUDED_DEVICE_IDS,
+                default=defaults.get(CONF_EXCLUDED_DEVICE_IDS, []),
+            ): selector.DeviceSelector(
+                selector.DeviceSelectorConfig(multiple=True)
+            ),
+            vol.Optional(
+                CONF_EXCLUDED_ENTITY_IDS,
+                default=defaults.get(CONF_EXCLUDED_ENTITY_IDS, []),
             ): selector.EntitySelector(
                 selector.EntitySelectorConfig(multiple=True)
             ),

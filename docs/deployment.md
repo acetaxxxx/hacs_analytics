@@ -2,7 +2,12 @@
 
 ## Home Assistant / Raspberry Pi
 
-Install the Python custom integration through HACS. Configure the sidecar base URL, shared token, selected report time, entity exclusions, and per-entity profile overrides in the Home Assistant UI. The initial active report time defaults to 08:00 and may be set to 12:00, 18:00, or 22:00. Home Assistant local timezone defines the report window.
+Install the Python custom integration through HACS. Open the integration's
+**Configure** action to set the sidecar base URL/token, tracking scope
+(domains/devices/entities and exclusions), report time, and per-entity profile
+overrides. The initial active report time defaults to 08:00 and may be set to
+12:00, 18:00, or 22:00. Home Assistant local timezone defines the report
+window.
 
 The integration does not create an analytics database on the Pi. Its only runtime buffer is the bounded in-memory batch. If the sidecar is unavailable, state events are not durably queued on the Pi; the heartbeat/gap indicator makes this visible. The existing Telegram service is selected in Home Assistant and receives the report after polling completes.
 
