@@ -11,10 +11,10 @@ The integration does not create an analytics database on the Pi. Its only runtim
 The old Windows computer runs one small Docker container with about 1 GB available RAM and a persistent volume for SQLite. The container exposes the REST port only to the LAN. The Gemini key and shared token are injected as environment variables or Docker secrets.
 
 Every branch push builds and publishes a `linux/amd64` image
-`ghcr.io/acetaxxxx/homekeeper-analyticsd:<sha6>`, where `<sha6>` is the final
-six characters of the commit SHA. Pull requests build the image without
+`ghcr.io/acetaxxxx/homekeeper-analyticsd:<sha7>`, where `<sha7>` is the first
+seven characters of the commit SHA. Pull requests build the image without
 publishing it. Pushing a Git tag promotes the image for that commit from its
-`<sha6>` tag to the Git tag name; it does not rebuild the image.
+`<sha7>` tag to the Git tag name; it does not rebuild the image.
 
 Illustrative layout:
 

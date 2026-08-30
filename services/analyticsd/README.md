@@ -59,18 +59,18 @@ curl http://localhost:8080/api/v1/health/live
 The Compose service always pulls the image from
 `ghcr.io/acetaxxxx/homekeeper-analyticsd:<tag>`, persists SQLite data in the
 `homekeeper-data` volume, and restarts automatically unless stopped. CI
-publishes six-character commit tags for branch pushes and release tags for
+publishes seven-character commit tags for branch pushes and release tags for
 versioned releases.
 
 ## CI images
 
 Every branch push builds and publishes an image to
-GHCR for `linux/amd64`, using the final six characters of the commit SHA:
+GHCR for `linux/amd64`, using the first seven characters of the commit SHA:
 
 ```text
-ghcr.io/acetaxxxx/homekeeper-analyticsd:<sha6>
+ghcr.io/acetaxxxx/homekeeper-analyticsd:<sha7>
 ```
 
 Pull requests build the image for verification but do not publish it. When a
 Git tag is pushed, the release workflow pulls the image for that commit's
-`<sha6>` tag and publishes the same image under the sanitized Git tag name.
+`<sha7>` tag and publishes the same image under the sanitized Git tag name.
