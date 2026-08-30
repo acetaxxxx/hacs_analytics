@@ -41,6 +41,7 @@ The config flow asks for:
 - Included devices. If none are selected, all entities in the selected domains are tracked.
 - Included entities, for helpers such as `input_boolean.guest_mode` or `input_select.home_mode`.
 - Included domains, selected from a multi-select dropdown and all selected by default.
+- Excluded devices and exact entities. These exclusions always win, even if an entity is explicitly included.
 - Entity exclude globs, for example `sensor.time*,sensor.date*`.
 - Daily report time: 08:00, 12:00, 18:00, or 22:00.
 - Rollup retention days.

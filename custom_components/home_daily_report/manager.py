@@ -34,6 +34,8 @@ from .const import (
     CONF_AI_TASK_ENTITY_ID,
     CONF_ENABLE_AI_SUMMARY,
     CONF_GEMINI_MODEL,
+    CONF_EXCLUDED_DEVICE_IDS,
+    CONF_EXCLUDED_ENTITY_IDS,
     CONF_EXCLUDED_ENTITY_GLOBS,
     CONF_INCLUDED_DEVICE_IDS,
     CONF_INCLUDED_DOMAINS,
@@ -1043,9 +1045,19 @@ class HomeDailyReportManager:
 
     def _should_track_entity(self, entity_id: str) -> bool:
         """Return true if an entity should be tracked."""
+        excluded_entity_ids = self._option(CONF_EXCLUDED_ENTITY_IDS, [])
+        if entity_id in excluded_entity_ids:
+            return False
+
         for pattern in self._option(CONF_EXCLUDED_ENTITY_GLOBS, []):
             if fnmatch.fnmatch(entity_id, pattern):
                 return False
+
+        excluded_device_ids = self._option(CONF_EXCLUDED_DEVICE_IDS, [])
+        if excluded_device_ids and self._entity_belongs_to_selected_device(
+            entity_id, excluded_device_ids
+        ):
+            return False
 
         included_entity_ids = self._option(CONF_INCLUDED_ENTITY_IDS, [])
         if entity_id in included_entity_ids:

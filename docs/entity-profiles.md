@@ -12,7 +12,9 @@ domain match                                 -> automatic profile
 otherwise                                    -> generic profile
 ```
 
-The UI defaults to selecting all entities. Users can exclude entities or opt an entity into safe attributes. An excluded entity always wins over an otherwise matching profile.
+The UI defaults to selecting all entities. Users can exclude complete devices,
+exact entities, or entity glob patterns, and can opt an entity into safe
+attributes. An excluded entity always wins over an otherwise matching profile.
 
 ## Initial profiles
 
