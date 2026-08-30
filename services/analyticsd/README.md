@@ -46,18 +46,21 @@ Gemini key outside the image, using environment variables or Docker secrets.
 
 ## Docker Compose
 
-From the repository root, copy `.env.example` to `.env`, set
-`HOMEKEEPER_SHARED_TOKEN`, and optionally set `GEMINI_API_KEY`:
+From the repository root, copy `.env.example` to `.env`, set the published
+`HOMEKEEPER_IMAGE_TAG` and `HOMEKEEPER_SHARED_TOKEN`, and optionally set
+`GEMINI_API_KEY`:
 
 ```sh
 cp .env.example .env
-docker compose up -d --build
+docker compose up -d
 curl http://localhost:8080/api/v1/health/live
 ```
 
-The Compose service persists SQLite data in the `homekeeper-data` volume and
-restarts automatically unless stopped. Set `HOMEKEEPER_IMAGE` when running a
-published GHCR image instead of the local build.
+The Compose service always pulls the image from
+`ghcr.io/acetaxxxx/homekeeper-analyticsd:<tag>`, persists SQLite data in the
+`homekeeper-data` volume, and restarts automatically unless stopped. CI
+publishes six-character commit tags for branch pushes and release tags for
+versioned releases.
 
 ## CI images
 

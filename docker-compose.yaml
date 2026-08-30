@@ -1,9 +1,7 @@
 services:
   analyticsd:
-    build:
-      context: ./services/analyticsd
-      dockerfile: Dockerfile
-    image: ${HOMEKEEPER_IMAGE:-homekeeper-analyticsd:local}
+    image: ghcr.io/acetaxxxx/homekeeper-analyticsd:${HOMEKEEPER_IMAGE_TAG:?Set HOMEKEEPER_IMAGE_TAG to a published GHCR tag}
+    pull_policy: always
     restart: unless-stopped
     ports:
       - "${HOMEKEEPER_PORT:-8080}:8080"
