@@ -310,10 +310,12 @@ def _schema(defaults: dict[str, Any]) -> vol.Schema:
                 CONF_MAX_DAYS,
                 default=defaults.get(CONF_MAX_DAYS, DEFAULT_MAX_DAYS),
             ): vol.All(vol.Coerce(int), vol.Range(min=7, max=120)),
+            # Keep text fields serializable for Home Assistant's config-flow
+            # response; strict custom validation runs on submit below.
             vol.Required(
                 CONF_NOTIFY_SERVICE,
                 default=defaults.get(CONF_NOTIFY_SERVICE, DEFAULT_NOTIFY_SERVICE),
-            ): _validate_notify_service,
+            ): str,
             vol.Required(
                 CONF_SIDECAR_URL,
                 default=defaults.get(CONF_SIDECAR_URL, DEFAULT_SIDECAR_URL),
@@ -321,7 +323,7 @@ def _schema(defaults: dict[str, Any]) -> vol.Schema:
             vol.Required(
                 CONF_SIDECAR_TOKEN,
                 default=defaults.get(CONF_SIDECAR_TOKEN, ""),
-            ): vol.All(str, _validate_sidecar_token),
+            ): str,
             vol.Required(
                 CONF_SIDECAR_TIMEOUT,
                 default=defaults.get(
@@ -331,7 +333,7 @@ def _schema(defaults: dict[str, Any]) -> vol.Schema:
             vol.Required(
                 CONF_GEMINI_MODEL,
                 default=defaults.get(CONF_GEMINI_MODEL, DEFAULT_GEMINI_MODEL),
-            ): _validate_gemini_model,
+            ): str,
             vol.Optional(
                 CONF_PROFILE_OVERRIDES,
                 default=json.dumps(defaults.get(CONF_PROFILE_OVERRIDES, {})),
