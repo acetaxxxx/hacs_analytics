@@ -328,6 +328,10 @@ class HomeDailyReportManager:
         """Generate a daily report through the external Gemini sidecar."""
         target_date = report_date or self._default_report_date()
         if self._sidecar_client is not None and self._sidecar_client.configured:
+            # A report can be requested immediately after setup or a state
+            # change. Flush the debounce batch first so the sidecar does not
+            # build a report from data that is still only in HA memory.
+            await self._async_flush_pending_sidecar_events()
             return await self._async_generate_sidecar_report(
                 target_date,
                 notify,
@@ -641,6 +645,24 @@ class HomeDailyReportManager:
             self._create_flush_task(retry_attempt)
 
         self._flush_unsub = async_call_later(self.hass, delay, _retry)
+
+    async def _async_flush_pending_sidecar_events(self) -> None:
+        """Deliver all currently queued events before a report request."""
+        if self._flush_unsub is not None:
+            self._flush_unsub()
+            self._flush_unsub = None
+
+        while self._pending_events:
+            pending_before = len(self._pending_events)
+            await self._async_flush_events()
+            # A failed request is requeued and a bounded retry is scheduled;
+            # do not block report generation waiting for that retry schedule.
+            if len(self._pending_events) >= pending_before:
+                break
+
+        if not self._pending_events and self._flush_unsub is not None:
+            self._flush_unsub()
+            self._flush_unsub = None
 
     def _record_numeric_sample(
         self,

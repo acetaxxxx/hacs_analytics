@@ -66,8 +66,13 @@ docker run -d --name homekeeper-analyticsd -p 8080:8080 \
   -e HOMEKEEPER_SHARED_TOKEN='use-a-long-random-token' \
   -e GEMINI_API_KEY='your-gemini-api-key' \
   -e HOMEKEEPER_TIMEZONE='Asia/Taipei' \
-  -v homekeeper-data:/data homekeeper-analyticsd
+  -v ./data:/data homekeeper-analyticsd
 ```
+
+The SQLite database is visible on the host at `./data/homekeeper.db`. Create
+the directory first if Docker does not create it automatically. The Compose
+file uses the same host bind mount by default; set `HOMEKEEPER_DATA_DIR` in
+`.env` to choose another directory.
 
 Enter `http://<computer-ip>:8080`, the same shared token, and the selected
 Gemini model in the integration options. Keep the port on the trusted LAN and

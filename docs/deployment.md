@@ -13,7 +13,11 @@ The integration does not create an analytics database on the Pi. Its only runtim
 
 ## External Go service
 
-The old Windows computer runs one small Docker container with about 1 GB available RAM and a persistent volume for SQLite. The container exposes the REST port only to the LAN. The Gemini key and shared token are injected as environment variables or Docker secrets.
+The old Windows computer runs one small Docker container with about 1 GB available RAM and a host bind mount for SQLite. By default the database is visible at `./data/homekeeper.db` next to the Compose file; set `HOMEKEEPER_DATA_DIR` in `.env` for another host directory. The container exposes the REST port only to the LAN. The Gemini key and shared token are injected as environment variables or Docker secrets.
+
+This replaces the previous Docker named volume. Docker does not migrate that
+volume into the host directory automatically; since historical data is out of
+scope, a fresh database in the bind-mounted directory is expected.
 
 Every branch push builds and publishes a `linux/amd64` image
 `ghcr.io/acetaxxxx/homekeeper-analyticsd:<sha7>`, where `<sha7>` is the first
