@@ -353,7 +353,9 @@ class HomeDailyReportConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         config_entry: config_entries.ConfigEntry,
     ) -> HomeDailyReportOptionsFlow:
         """Create the options flow."""
-        return HomeDailyReportOptionsFlow(config_entry)
+        # Recent Home Assistant versions inject the entry into OptionsFlow
+        # and expose it through a read-only config_entry property.
+        return HomeDailyReportOptionsFlow()
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -380,10 +382,6 @@ class HomeDailyReportConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 class HomeDailyReportOptionsFlow(config_entries.OptionsFlow):
     """Handle Home Daily Report options."""
-
-    def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
-        """Initialize options flow."""
-        self.config_entry = config_entry
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
