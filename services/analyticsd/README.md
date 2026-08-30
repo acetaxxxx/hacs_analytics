@@ -44,6 +44,21 @@ docker run --rm -p 8080:8080 \
 The container uses a persistent volume for SQLite. Keep the shared token and
 Gemini key outside the image, using environment variables or Docker secrets.
 
+## Docker Compose
+
+From the repository root, copy `.env.example` to `.env`, set
+`HOMEKEEPER_SHARED_TOKEN`, and optionally set `GEMINI_API_KEY`:
+
+```sh
+cp .env.example .env
+docker compose up -d --build
+curl http://localhost:8080/api/v1/health/live
+```
+
+The Compose service persists SQLite data in the `homekeeper-data` volume and
+restarts automatically unless stopped. Set `HOMEKEEPER_IMAGE` when running a
+published GHCR image instead of the local build.
+
 ## CI images
 
 Every branch push builds and publishes an image to
