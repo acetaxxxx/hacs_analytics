@@ -42,6 +42,7 @@ from .const import (
     CONF_INCLUDED_ENTITY_IDS,
     CONF_MAX_DAYS,
     CONF_NOTIFY_SERVICE,
+    CONF_NOTIFY_TARGETS,
     CONF_PROFILE_OVERRIDES,
     CONF_REPORT_TIME,
     DEFAULT_ENABLE_AI_SUMMARY,
@@ -818,6 +819,8 @@ class HomeDailyReportManager:
             return
 
         domain, service = service_name.split(".", 1)
+        notify_targets = self._option(CONF_NOTIFY_TARGETS, [])
+        target = {"entity_id": notify_targets} if notify_targets else None
         message = self._notification_message(report)
         report_date = report.get("date", report.get("report_date", self._today()))
         chunks = _split_message(message)
@@ -831,12 +834,10 @@ class HomeDailyReportManager:
                 service_data["notification_id"] = f"{DOMAIN}_{report_date}{suffix}"
 
             try:
-                await self.hass.services.async_call(
-                    domain,
-                    service,
-                    service_data,
-                    blocking=False,
-                )
+                call_kwargs: dict[str, Any] = {"blocking": False}
+                if target is not None:
+                    call_kwargs["target"] = target
+                await self.hass.services.async_call(domain, service, service_data, **call_kwargs)
             except Exception as err:  # noqa: BLE001
                 _LOGGER.warning("Failed to send report notification: %s", err)
 

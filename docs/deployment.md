@@ -9,7 +9,17 @@ overrides. The initial active report time defaults to 08:00 and may be set to
 12:00, 18:00, or 22:00. Home Assistant local timezone defines the report
 window.
 
-The integration does not create an analytics database on the Pi. Its only runtime buffer is the bounded in-memory batch. If the sidecar is unavailable, state events are not durably queued on the Pi; the heartbeat/gap indicator makes this visible. The existing Telegram service is selected in Home Assistant and receives the report after polling completes.
+The integration does not create an analytics database on the Pi. Its only runtime buffer is the bounded in-memory batch. If the sidecar is unavailable, state events are not durably queued on the Pi; the heartbeat/gap indicator makes this visible.
+
+For Telegram, configure the integration's **Notification service** and
+**Notification targets** fields. With the current Telegram Bot integration,
+use `notify.send_message` and select the generated `notify.*` Telegram entity
+as a target. The target is sent as the service call's `entity_id`; without it,
+Home Assistant may accept the call but have no Telegram recipient to deliver
+to. Older Telegram notify services such as `notify.telegram` remain supported
+and do not require a target. First test the selected service/entity in
+Developer Tools → Actions, then use `home_daily_report.generate_report` with
+`notify: true`.
 
 ## External Go service
 

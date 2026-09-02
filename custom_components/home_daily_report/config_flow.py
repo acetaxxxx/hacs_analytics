@@ -25,6 +25,7 @@ from .const import (
     CONF_INCLUDED_ENTITY_IDS,
     CONF_MAX_DAYS,
     CONF_NOTIFY_SERVICE,
+    CONF_NOTIFY_TARGETS,
     CONF_REPORT_TIME,
     CONF_SIDECAR_TIMEOUT,
     CONF_SIDECAR_TOKEN,
@@ -237,6 +238,9 @@ def _normalize_user_input(user_input: dict[str, Any]) -> dict[str, Any]:
         ),
         CONF_MAX_DAYS: user_input[CONF_MAX_DAYS],
         CONF_NOTIFY_SERVICE: _validate_notify_service(user_input[CONF_NOTIFY_SERVICE]),
+        CONF_NOTIFY_TARGETS: _normalize_list(
+            user_input.get(CONF_NOTIFY_TARGETS), lowercase=False
+        ),
         CONF_SIDECAR_URL: _validate_sidecar_url(
             str(user_input.get(CONF_SIDECAR_URL, DEFAULT_SIDECAR_URL)).strip()
         ),
@@ -316,6 +320,12 @@ def _schema(defaults: dict[str, Any]) -> vol.Schema:
                 CONF_NOTIFY_SERVICE,
                 default=defaults.get(CONF_NOTIFY_SERVICE, DEFAULT_NOTIFY_SERVICE),
             ): str,
+            vol.Optional(
+                CONF_NOTIFY_TARGETS,
+                default=defaults.get(CONF_NOTIFY_TARGETS, []),
+            ): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="notify", multiple=True)
+            ),
             vol.Required(
                 CONF_SIDECAR_URL,
                 default=defaults.get(CONF_SIDECAR_URL, DEFAULT_SIDECAR_URL),
