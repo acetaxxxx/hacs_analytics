@@ -54,9 +54,9 @@ For a report date:
 5. Validate and normalize Gemini output. Schema failure is a failed attempt, not a partially valid report.
 6. Store the complete structured report and its run metadata.
 7. Home Assistant polls job status and then fetches the report.
-8. The integration exposes a compact sensor state/attributes view and sends the report through the configured existing Telegram service. Telegram messages are split when the channel limit requires it.
+8. The integration exposes a compact sensor state/attributes view and sends the report through the configured Home Assistant notification action or destination. Long messages are split at safe boundaries.
 
-Manual reports accept an explicit ISO local date (`YYYY-MM-DD`) and use the same idempotency semantics. A rerun creates a new run for the same date only after an explicit force operation; ordinary polling/retry never overwrites a completed report.
+Manual reports accept an explicit ISO local date (`YYYY-MM-DD`) and use the same idempotency semantics by default. An explicit rerun replaces a completed, failed, or retry-scheduled run for that date using currently retained observations; it is rejected while the date is actively processing. Ordinary polling/retry never overwrites a completed report.
 
 ## Backpressure and limits
 

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math"
 	"net/http"
 	"regexp"
@@ -47,6 +48,10 @@ type ReportStore interface {
 	GetReportResult(context.Context, string) ([]byte, error)
 }
 
+type ForceReportStore interface {
+	ForceReport(context.Context, string, string) (store.ReportJob, error)
+}
+
 // Config configures the HTTP boundary. Secrets are never included in a
 // response or an error.
 type Config struct {
@@ -54,6 +59,7 @@ type Config struct {
 	ContractMajor    string
 	MaxBodyBytes     int64
 	GeminiConfigured bool
+	Logger           *slog.Logger
 }
 
 // Health is the public readiness response consumed by container probes and
@@ -79,6 +85,7 @@ type server struct {
 	config      Config
 	store       IngestStore
 	reportStore ReportStore
+	logger      *slog.Logger
 }
 
 // NewServer validates the HTTP boundary configuration and returns an
@@ -99,16 +106,40 @@ func NewServer(config Config, st IngestStore) (*server, error) {
 	if config.MaxBodyBytes < 1 {
 		return nil, errors.New("max body bytes must be positive")
 	}
+	if config.Logger == nil {
+		config.Logger = slog.Default()
+	}
 	var reportStore ReportStore
 	if candidate, ok := st.(ReportStore); ok {
 		reportStore = candidate
 	}
-	return &server{config: config, store: st, reportStore: reportStore}, nil
+	return &server{config: config, store: st, reportStore: reportStore, logger: config.Logger}, nil
 }
 
 // Handler returns the complete HTTP handler for the sidecar.
 func (s *server) Handler() http.Handler {
-	return http.HandlerFunc(s.serveHTTP)
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		started := time.Now()
+		response := &statusRecorder{ResponseWriter: writer, status: http.StatusOK}
+		s.serveHTTP(response, request)
+		s.logger.Info("http request",
+			"request_id", request.Header.Get(requestIDHeader),
+			"method", request.Method,
+			"path", request.URL.Path,
+			"status", response.status,
+			"duration_ms", time.Since(started).Milliseconds(),
+		)
+	})
+}
+
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (r *statusRecorder) WriteHeader(status int) {
+	r.status = status
+	r.ResponseWriter.WriteHeader(status)
 }
 
 func (s *server) serveHTTP(writer http.ResponseWriter, request *http.Request) {
@@ -153,6 +184,10 @@ func (s *server) serveHTTP(writer http.ResponseWriter, request *http.Request) {
 		return
 	case request.Method == http.MethodPost && request.URL.Path == "/api/v1/reports":
 		s.handleReportRequest(writer, request, requestID)
+		return
+	}
+	if request.Method == http.MethodPost && strings.HasPrefix(request.URL.Path, "/api/v1/reports/") {
+		s.handleReportRerun(writer, request, requestID)
 		return
 	}
 	if request.Method == http.MethodGet && strings.HasPrefix(request.URL.Path, "/api/v1/reports/") {
@@ -364,6 +399,12 @@ func (s *server) handleIngestEvents(writer http.ResponseWriter, request *http.Re
 		writeError(writer, http.StatusInternalServerError, "internal_error", "failed to ingest events", requestID)
 		return
 	}
+	s.logger.Info("events ingested",
+		"request_id", requestID,
+		"accepted", result.Accepted,
+		"duplicates", result.Duplicates,
+		"ignored", result.Ignored,
+	)
 
 	writeJSON(writer, http.StatusOK, result)
 }
@@ -410,6 +451,11 @@ func (s *server) handleIngestHeartbeat(writer http.ResponseWriter, request *http
 		writeError(writer, http.StatusInternalServerError, "internal_error", "failed to record heartbeat", requestID)
 		return
 	}
+	s.logger.Info("heartbeat ingested",
+		"request_id", requestID,
+		"status", result.Status,
+		"gap_detected", result.GapDetected,
+	)
 
 	writeJSON(writer, http.StatusOK, result)
 }
@@ -418,6 +464,11 @@ type reportRequestJSON struct {
 	ReportDate string `json:"report_date"`
 	Model      string `json:"model,omitempty"`
 	UseAI      *bool  `json:"use_ai,omitempty"`
+}
+
+type reportRerunJSON struct {
+	Model string `json:"model,omitempty"`
+	UseAI *bool  `json:"use_ai,omitempty"`
 }
 
 func (s *server) handleReportRequest(writer http.ResponseWriter, request *http.Request, requestID string) {
@@ -451,6 +502,57 @@ func (s *server) handleReportRequest(writer http.ResponseWriter, request *http.R
 		writeError(writer, http.StatusInternalServerError, "internal_error", "failed to request report", requestID)
 		return
 	}
+	s.logger.Info("report requested", "request_id", requestID, "report_date", body.ReportDate, "status", job.Status)
+	writeJSON(writer, http.StatusAccepted, job)
+}
+
+func (s *server) handleReportRerun(writer http.ResponseWriter, request *http.Request, requestID string) {
+	if s.reportStore == nil {
+		writeError(writer, http.StatusServiceUnavailable, "not_ready", "report service is not ready", requestID)
+		return
+	}
+	path := strings.TrimPrefix(request.URL.Path, "/api/v1/reports/")
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) != 2 || parts[1] != "rerun" || !validReportDate(parts[0]) {
+		writeError(writer, http.StatusNotFound, "not_found", "report rerun endpoint not found", requestID)
+		return
+	}
+	var body reportRerunJSON
+	if err := decodeStrict(request.Body, &body); err != nil {
+		if errors.Is(err, errBodyTooLarge) {
+			writeError(writer, http.StatusRequestEntityTooLarge, "body_too_large", "request body is too large", requestID)
+			return
+		}
+		writeError(writer, http.StatusBadRequest, "invalid_payload", "malformed report rerun body", requestID)
+		return
+	}
+	if body.Model != "" && !validGeminiModel(body.Model) {
+		writeError(writer, http.StatusBadRequest, "invalid_payload", "invalid report model", requestID)
+		return
+	}
+	forceStore, ok := s.reportStore.(ForceReportStore)
+	if !ok {
+		writeError(writer, http.StatusServiceUnavailable, "not_ready", "report rerun is not supported", requestID)
+		return
+	}
+	useAI := true
+	if body.UseAI != nil {
+		useAI = *body.UseAI
+	}
+	configSnapshot, _ := json.Marshal(struct {
+		Model string `json:"model"`
+		UseAI bool   `json:"use_ai"`
+	}{Model: body.Model, UseAI: useAI})
+	job, err := forceStore.ForceReport(request.Context(), parts[0], string(configSnapshot))
+	if errors.Is(err, store.ErrReportInProgress) {
+		writeError(writer, http.StatusConflict, "report_in_progress", "report is already being processed", requestID)
+		return
+	}
+	if err != nil {
+		writeError(writer, http.StatusInternalServerError, "internal_error", "failed to rerun report", requestID)
+		return
+	}
+	s.logger.Info("report rerun requested", "request_id", requestID, "report_date", parts[0], "status", job.Status)
 	writeJSON(writer, http.StatusAccepted, job)
 }
 

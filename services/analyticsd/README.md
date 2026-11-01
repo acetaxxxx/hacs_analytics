@@ -24,10 +24,15 @@ The service exposes:
 - `GET /api/v1/health/live` for a process liveness probe.
 - `GET /api/v1/health` for SQLite/Gemini readiness.
 - `POST /api/v1/ingest/events` and `/api/v1/ingest/heartbeat` for the HA integration.
-- `POST /api/v1/reports`, then `GET /api/v1/reports/{date}` and `/result`.
+- `POST /api/v1/reports`, or explicit reruns via `POST /api/v1/reports/{date}/rerun`, then `GET /api/v1/reports/{date}` and `/result`.
 
 Protected endpoints require `Authorization: Bearer $HOMEKEEPER_SHARED_TOKEN`,
 `X-Request-ID`, and `X-Homekeeper-Contract-Version: 1`.
+
+HTTP requests are logged to stdout with request ID, method, path, status, and
+duration. Event-ingest logs also report accepted/duplicate counts. Request
+bodies, authorization headers, and notification contents are not logged.
+Follow them with `docker compose logs -f --tail=100 analyticsd`.
 
 ## Docker
 

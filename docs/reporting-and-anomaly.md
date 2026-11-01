@@ -56,4 +56,4 @@ The report remains in `ai_pending`/`ai_retry_scheduled` after a transient Gemini
 
 ## Notification
 
-Home Assistant polls the report and uses its already configured Telegram notification service. The sidecar does not need Telegram credentials. Long messages are split at safe boundaries, and the full JSON remains available through the report endpoint.
+Home Assistant polls the report and uses its configured notification action or destination. The sidecar does not need Telegram credentials. Long messages are split at safe boundaries, and the full JSON remains available through the report endpoint.

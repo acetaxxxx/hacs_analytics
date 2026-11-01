@@ -113,6 +113,34 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '409':
           $ref: '#/components/responses/Conflict'
+  /api/v1/reports/{report_date}/rerun:
+    post:
+      operationId: rerunReport
+      parameters:
+        - $ref: '#/components/parameters/ReportDate'
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/ContractVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReportRerunRequest'
+      responses:
+        '202':
+          description: A forced rerun was queued.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReportJob'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/Unavailable'
   /api/v1/reports/{report_date}:
     get:
       operationId: getReportStatus
@@ -273,6 +301,16 @@ components:
       required: [report_date]
       properties:
         report_date: {type: string, format: date}
+        model:
+          type: string
+          maxLength: 128
+          pattern: '^gemini-'
+        use_ai:
+          type: boolean
+    ReportRerunRequest:
+      type: object
+      additionalProperties: false
+      properties:
         model:
           type: string
           maxLength: 128
