@@ -149,7 +149,7 @@ func classifyAPIError(causeType string, statusCode int, providerStatus string) e
 	case statusCode == 429:
 		code = RateLimited
 		kind = "rate_limited"
-	case statusCode == 500 || statusCode == 503:
+	case statusCode >= 500 && statusCode <= 599:
 		code = Transient
 		kind = "provider_5xx"
 	}
