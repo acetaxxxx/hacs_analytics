@@ -102,7 +102,7 @@ func main() {
 			location = configured
 		}
 	}
-	reportWorker := &worker.ReportWorker{Store: database, LLM: llmClient, Location: location, Model: cfg.geminiModel, Interval: 30 * time.Second}
+	reportWorker := &worker.ReportWorker{Store: database, LLM: llmClient, Logger: logger, Location: location, Model: cfg.geminiModel, Interval: 30 * time.Second}
 	go func() {
 		if workerErr := reportWorker.Run(shutdownContext); workerErr != nil && !errors.Is(workerErr, context.Canceled) {
 			logger.Error("report worker stopped", "error", workerErr)

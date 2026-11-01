@@ -3,7 +3,7 @@ module github.com/acetaxxxx/hacs_analytics/services/analyticsd
 go 1.25.0
 
 require (
-	google.golang.org/genai v1.70.0
+	google.golang.org/genai v1.76.0
 	modernc.org/sqlite v1.57.0
 )
 

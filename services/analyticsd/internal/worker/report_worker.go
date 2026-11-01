@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -24,6 +25,7 @@ import (
 type ReportWorker struct {
 	Store    *store.Store
 	LLM      report.LLMClient
+	Logger   *slog.Logger
 	Location *time.Location
 	Model    string
 	Interval time.Duration
@@ -148,6 +150,12 @@ func (w *ReportWorker) processDate(ctx context.Context, reportDate string) error
 		return w.Store.SaveReportResult(ctx, reportDate, payload, "ai_failed")
 	}
 	if w.LLM == nil {
+		w.logger().Warn("Gemini report skipped",
+			"report_date", reportDate,
+			"model", model,
+			"attempt", job.Attempt,
+			"error_code", "gemini_not_configured",
+		)
 		return w.saveFailureReport(ctx, reportDate, deterministic, "gemini_not_configured")
 	}
 	prompt, err := report.Prompt(deterministic)
@@ -171,12 +179,42 @@ func (w *ReportWorker) processDate(ctx context.Context, reportDate string) error
 		if errors.As(err, &providerErr) {
 			transient = providerErr.Code == gemini.Transient || providerErr.Code == gemini.RateLimited
 		}
-		if transient && job.Attempt < maxReportAttempts {
+		retryScheduled := transient && job.Attempt < maxReportAttempts
+		var nextAttempt time.Time
+		if retryScheduled {
 			attemptStatus = "retry_scheduled"
+			nextAttempt = retryAt(job.Attempt)
+		}
+		logAttrs := []any{
+			"report_date", reportDate,
+			"request_id", requestID,
+			"model", model,
+			"attempt", job.Attempt,
+			"error_code", code,
+			"retry_scheduled", retryScheduled,
+			"duration_ms", endedAt.Sub(startedAt).Milliseconds(),
+		}
+		if retryScheduled {
+			logAttrs = append(logAttrs, "next_attempt_at", nextAttempt.UTC().Format(time.RFC3339))
+		}
+		if errors.As(err, &providerErr) {
+			logAttrs = append(logAttrs,
+				"error_kind", providerErr.Kind,
+				"error_type", providerErr.CauseType,
+			)
+			if providerErr.HTTPStatus != 0 {
+				logAttrs = append(logAttrs, "http_status", providerErr.HTTPStatus)
+			}
+			if providerErr.ProviderStatus != "" {
+				logAttrs = append(logAttrs, "provider_status", providerErr.ProviderStatus)
+			}
+		}
+		w.logger().Warn("Gemini report attempt failed", logAttrs...)
+		if retryScheduled {
 			if attemptErr := w.saveLLMAttempt(ctx, reportDate, job.Attempt, model, requestID, startedAt, endedAt, attemptStatus, prompt, code); attemptErr != nil {
 				return attemptErr
 			}
-			return w.Store.ScheduleReportRetry(ctx, reportDate, code, retryAt(job.Attempt))
+			return w.Store.ScheduleReportRetry(ctx, reportDate, code, nextAttempt)
 		}
 		if attemptErr := w.saveLLMAttempt(ctx, reportDate, job.Attempt, model, requestID, startedAt, endedAt, attemptStatus, prompt, code); attemptErr != nil {
 			return attemptErr
@@ -199,6 +237,13 @@ func (w *ReportWorker) processDate(ctx context.Context, reportDate string) error
 		return err
 	}
 	return w.Store.SaveReportResult(ctx, reportDate, payload, "completed")
+}
+
+func (w *ReportWorker) logger() *slog.Logger {
+	if w.Logger != nil {
+		return w.Logger
+	}
+	return slog.Default()
 }
 
 func (w *ReportWorker) saveLLMAttempt(ctx context.Context, reportDate string, attempt int, model, requestID string, startedAt, endedAt time.Time, status, prompt, code string) error {

@@ -32,6 +32,9 @@ Protected endpoints require `Authorization: Bearer $HOMEKEEPER_SHARED_TOKEN`,
 HTTP requests are logged to stdout with request ID, method, path, status, and
 duration. Event-ingest logs also report accepted/duplicate counts. Request
 bodies, authorization headers, and notification contents are not logged.
+Gemini attempt failures include the report date, model, attempt, safe error
+category, provider HTTP status when available, and duration. API keys, prompts,
+and provider response bodies are not logged.
 Follow them with `docker compose logs -f --tail=100 analyticsd`.
 
 ## Docker
