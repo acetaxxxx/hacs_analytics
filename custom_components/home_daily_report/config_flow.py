@@ -18,6 +18,7 @@ from .const import (
     CONF_GEMINI_MODEL,
     CONF_EXCLUDED_DEVICE_IDS,
     CONF_EXCLUDED_ENTITY_IDS,
+    CONF_IMMEDIATE_ALERT_EXCLUDED_ENTITY_IDS,
     CONF_PROFILE_OVERRIDES,
     CONF_EXCLUDED_ENTITY_GLOBS,
     CONF_INCLUDED_DEVICE_IDS,
@@ -25,6 +26,7 @@ from .const import (
     CONF_INCLUDED_ENTITY_IDS,
     CONF_MAX_DAYS,
     CONF_NOTIFY_SERVICE,
+    CONF_NOTIFY_TARGET_ENTITY_IDS,
     CONF_REPORT_TIME,
     CONF_SIDECAR_TIMEOUT,
     CONF_SIDECAR_TOKEN,
@@ -229,6 +231,9 @@ def _normalize_user_input(user_input: dict[str, Any]) -> dict[str, Any]:
         CONF_EXCLUDED_ENTITY_IDS: _normalize_list(
             user_input.get(CONF_EXCLUDED_ENTITY_IDS)
         ),
+        CONF_IMMEDIATE_ALERT_EXCLUDED_ENTITY_IDS: _normalize_list(
+            user_input.get(CONF_IMMEDIATE_ALERT_EXCLUDED_ENTITY_IDS)
+        ),
         CONF_EXCLUDED_ENTITY_GLOBS: _csv_to_list(
             user_input.get(CONF_EXCLUDED_ENTITY_GLOBS, "")
         ),
@@ -237,6 +242,9 @@ def _normalize_user_input(user_input: dict[str, Any]) -> dict[str, Any]:
         ),
         CONF_MAX_DAYS: user_input[CONF_MAX_DAYS],
         CONF_NOTIFY_SERVICE: _validate_notify_service(user_input[CONF_NOTIFY_SERVICE]),
+        CONF_NOTIFY_TARGET_ENTITY_IDS: _normalize_list(
+            user_input.get(CONF_NOTIFY_TARGET_ENTITY_IDS)
+        ),
         CONF_SIDECAR_URL: _validate_sidecar_url(
             str(user_input.get(CONF_SIDECAR_URL, DEFAULT_SIDECAR_URL)).strip()
         ),
@@ -294,6 +302,12 @@ def _schema(defaults: dict[str, Any]) -> vol.Schema:
                 selector.EntitySelectorConfig(multiple=True)
             ),
             vol.Optional(
+                CONF_IMMEDIATE_ALERT_EXCLUDED_ENTITY_IDS,
+                default=defaults.get(CONF_IMMEDIATE_ALERT_EXCLUDED_ENTITY_IDS, []),
+            ): selector.EntitySelector(
+                selector.EntitySelectorConfig(multiple=True)
+            ),
+            vol.Optional(
                 CONF_EXCLUDED_ENTITY_GLOBS,
                 default=_list_to_csv(defaults.get(CONF_EXCLUDED_ENTITY_GLOBS, [])),
             ): str,
@@ -316,6 +330,12 @@ def _schema(defaults: dict[str, Any]) -> vol.Schema:
                 CONF_NOTIFY_SERVICE,
                 default=defaults.get(CONF_NOTIFY_SERVICE, DEFAULT_NOTIFY_SERVICE),
             ): str,
+            vol.Optional(
+                CONF_NOTIFY_TARGET_ENTITY_IDS,
+                default=defaults.get(CONF_NOTIFY_TARGET_ENTITY_IDS, []),
+            ): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="notify", multiple=True)
+            ),
             vol.Required(
                 CONF_SIDECAR_URL,
                 default=defaults.get(CONF_SIDECAR_URL, DEFAULT_SIDECAR_URL),

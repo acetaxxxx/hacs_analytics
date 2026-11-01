@@ -13,6 +13,7 @@ from homeassistant.helpers import config_validation as cv
 
 from .const import (
     ATTR_DATE,
+    ATTR_FORCE,
     ATTR_NOTIFY,
     ATTR_USE_AI,
     DOMAIN,
@@ -28,6 +29,7 @@ GENERATE_REPORT_SCHEMA = vol.Schema(
         vol.Optional(ATTR_DATE): str,
         vol.Optional(ATTR_USE_AI, default=True): cv.boolean,
         vol.Optional(ATTR_NOTIFY, default=True): cv.boolean,
+        vol.Optional(ATTR_FORCE, default=False): cv.boolean,
     }
 )
 
@@ -84,11 +86,13 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         report_date = call.data.get(ATTR_DATE)
         use_ai = call.data[ATTR_USE_AI]
         notify = call.data[ATTR_NOTIFY]
+        force = call.data[ATTR_FORCE]
 
         await manager.async_generate_report(
             report_date=report_date,
             use_ai=use_ai,
             notify=notify,
+            force=force,
         )
 
     hass.services.async_register(

@@ -22,7 +22,7 @@ The request asks Gemini for structured JSON using the report schema. The Go serv
 
 The report run stores provider, model, request ID, attempt, timing, usage if returned, input hash, and error code in SQLite. Transient failures (timeout, connection reset, HTTP 429/5xx) are retried at 15 minutes, 1 hour, 4 hours, and next day. Authentication, invalid request, quota configuration, and schema failures are surfaced without an unbounded retry loop.
 
-The daily report is idempotent by report date. A retry may repeat an external API request, but it cannot create a second stored completed report for the same date. A configurable future budget can cap attempts or estimated tokens; the first release does not semantically cap anomaly/suggestion count, but it does enforce provider context/body limits and records any truncation.
+Ordinary daily report requests are idempotent by report date. An authenticated explicit rerun can replace a completed, failed, or retry-scheduled report for that date; a retry cannot create a second stored report. A configurable future budget can cap attempts or estimated tokens; the first release does not semantically cap anomaly/suggestion count, but it does enforce provider context/body limits and records any truncation.
 
 ## Testing
 

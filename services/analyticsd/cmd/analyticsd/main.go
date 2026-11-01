@@ -75,6 +75,7 @@ func main() {
 		ContractMajor:    cfg.contractMajor,
 		MaxBodyBytes:     cfg.maxBodyBytes,
 		GeminiConfigured: cfg.geminiConfigured,
+		Logger:           logger,
 	}, database)
 	if err != nil {
 		logger.Error("HTTP startup failed", "error", err)

@@ -42,10 +42,13 @@ The config flow asks for:
 - Included entities, for helpers such as `input_boolean.guest_mode` or `input_select.home_mode`.
 - Included domains, selected from a multi-select dropdown and all selected by default.
 - Excluded devices and exact entities. These exclusions always win, even if an entity is explicitly included.
+- Entities excluded from immediate risk notifications. They remain tracked and may still appear in daily reports.
 - Entity exclude globs, for example `sensor.time*,sensor.date*`.
 - Daily report time: 08:00, 12:00, 18:00, or 22:00.
 - Rollup retention days.
-- Existing Home Assistant notification service, for example `notify.telegram`.
+- Existing Home Assistant notification action (for example `notify.telegram`) or notify entity (for example `notify.my_phone`).
+- Optional notification target entities for actions such as `telegram_bot.send_message`.
+- For the Telegram Bot action, use `telegram_bot.send_message` and select the target entity, such as `notify.foxhomeset_hank_yin`.
 - Sidecar URL, shared token, timeout, and Gemini model (Flash is the default).
 
 ### External sidecar
@@ -91,6 +94,10 @@ data:
   use_ai: true
   notify: true
 ```
+
+To recompute a date that already has a report, add `force: true`. This replaces
+that date's saved report and LLM attempt records; it cannot interrupt a report
+that is already processing.
 
 If `date` is omitted, the integration reports yesterday.
 

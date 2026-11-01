@@ -21,6 +21,8 @@ const (
 	busyTimeout = 5000
 )
 
+var ErrReportInProgress = errors.New("report is already in progress")
+
 // IngestEvent represents one state change or snapshot observation.
 type IngestEvent struct {
 	EventID        string         `json:"event_id"`
@@ -757,6 +759,65 @@ func (s *Store) RequestReport(ctx context.Context, reportDate, configSnapshot st
 		ON CONFLICT(report_date) DO NOTHING`, reportDate, time.Now().UnixMilli(), configSnapshot)
 	if err != nil {
 		return ReportJob{}, fmt.Errorf("request report: %w", err)
+	}
+	return s.GetReportJob(ctx, reportDate)
+}
+
+// ForceReport resets a terminal report job so the worker recomputes it from
+// current retained data. The prior result and LLM attempt records are replaced.
+func (s *Store) ForceReport(ctx context.Context, reportDate, configSnapshot string) (ReportJob, error) {
+	if s == nil || s.db == nil {
+		return ReportJob{}, errors.New("database is not open")
+	}
+	if _, err := time.Parse("2006-01-02", reportDate); err != nil {
+		return ReportJob{}, errors.New("report date must use YYYY-MM-DD")
+	}
+	if configSnapshot == "" {
+		configSnapshot = "{}"
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return ReportJob{}, fmt.Errorf("begin forced report: %w", err)
+	}
+	defer tx.Rollback()
+
+	var status string
+	err = tx.QueryRowContext(ctx,
+		`SELECT status FROM report_runs WHERE report_date = ?`, reportDate,
+	).Scan(&status)
+	now := time.Now().UnixMilli()
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		_, err = tx.ExecContext(ctx, `
+			INSERT INTO report_runs(report_date, requested_at_ms, status, attempt, config_snapshot_json)
+			VALUES (?, ?, 'requested', 0, ?)`, reportDate, now, configSnapshot)
+		if err != nil {
+			return ReportJob{}, fmt.Errorf("create forced report: %w", err)
+		}
+	case err != nil:
+		return ReportJob{}, fmt.Errorf("read report before force: %w", err)
+	case status != "completed" && status != "ai_failed" && status != "ai_retry_scheduled":
+		return ReportJob{}, fmt.Errorf("%w: status %s", ErrReportInProgress, status)
+	default:
+		if _, err := tx.ExecContext(ctx,
+			`DELETE FROM llm_attempts WHERE report_date = ?`, reportDate,
+		); err != nil {
+			return ReportJob{}, fmt.Errorf("clear prior report attempts: %w", err)
+		}
+		_, err = tx.ExecContext(ctx, `
+			UPDATE report_runs
+			SET requested_at_ms = ?, started_at_ms = NULL, completed_at_ms = NULL,
+			    status = 'requested', attempt = 0, next_attempt_at_ms = NULL,
+			    error_code = NULL, deterministic_json = NULL, report_json = NULL,
+			    report_schema_version = NULL, config_snapshot_json = ?,
+			    lease_expires_at_ms = NULL
+			WHERE report_date = ?`, now, configSnapshot, reportDate)
+		if err != nil {
+			return ReportJob{}, fmt.Errorf("reset forced report: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return ReportJob{}, fmt.Errorf("commit forced report: %w", err)
 	}
 	return s.GetReportJob(ctx, reportDate)
 }

@@ -23,7 +23,7 @@ The sidecar stores raw records for 30 days and daily rollups, report runs, and L
 
 Deterministic rules produce evidence first. Gemini receives a bounded, redacted aggregate DTO and returns a schema-validated Traditional Chinese report with fixed English keys and enum values. The API key exists only in the sidecar environment or Docker secret. Gemini is initially accessed directly through Google's official Go SDK, `google.golang.org/genai`; the model is configurable from Home Assistant, defaults to Flash, and may be any supported Gemini model including Pro.
 
-The report covers the previous complete local calendar day at one selected active time, defaulting to 08:00 with 12:00, 18:00, and 22:00 as alternatives. Scheduled and manual requests are idempotent by report date. Transient Gemini errors retry at 15 minutes, 1 hour, 4 hours, and the next day, then become `ai_failed` and notify the user.
+The report covers the previous complete local calendar day at one selected active time, defaulting to 08:00 with 12:00, 18:00, and 22:00 as alternatives. Ordinary scheduled and manual requests are idempotent by report date; a manual request can explicitly rerun a completed, failed, or retry-scheduled report. Transient Gemini errors retry at 15 minutes, 1 hour, 4 hours, and the next day, then become `ai_failed` and notify the user.
 
 ## User Stories
 
@@ -129,7 +129,7 @@ The report covers the previous complete local calendar day at one selected activ
 - Manual reports accept a local ISO date (`YYYY-MM-DD`).
 - Report jobs are idempotent by `report_date`; the job stores the configuration/profile snapshot used for the run.
 - The report state sequence is requested, collecting, deterministic-ready, AI-pending, AI-running, completed, AI-retry-scheduled, or AI-failed.
-- A completed report is not overwritten by ordinary polling or retry. Any future forced recompute must be an explicit operation outside this first release.
+- A completed report is not overwritten by ordinary polling or retry. An authenticated explicit rerun operation replaces a completed, failed, or retry-scheduled result for a date using currently retained data; an actively processing job cannot be interrupted.
 
 ### Deterministic analysis and risk
 

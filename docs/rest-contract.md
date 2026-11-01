@@ -13,6 +13,7 @@ intended for container probes.
 | `POST` | `/api/v1/ingest/events` | Ingest an event/snapshot batch idempotently |
 | `POST` | `/api/v1/ingest/heartbeat` | Close heartbeat interval and detect gaps |
 | `POST` | `/api/v1/reports` | Request a report for a local date |
+| `POST` | `/api/v1/reports/{report_date}/rerun` | Explicitly rerun a report date |
 | `GET` | `/api/v1/reports/{report_date}` | Poll report job status |
 | `GET` | `/api/v1/reports/{report_date}/result` | Fetch complete report JSON |
 | `GET` | `/api/v1/health` | Liveness/readiness without analytics data |
@@ -25,7 +26,7 @@ The heartbeat body identifies the sender instance and its observed time. A heart
 
 ## Report behavior
 
-`POST /reports` requires a local `report_date`. If a report job for that date exists, the response returns the existing job and does not start a duplicate Gemini call. A future force/recompute endpoint must be explicit and separately authorized; it is not part of the first release.
+`POST /reports` requires a local `report_date`. If a report job for that date exists, the response returns the existing job and does not start a duplicate Gemini call. The authenticated `POST /reports/{report_date}/rerun` endpoint explicitly replaces a completed, failed, or retry-scheduled run using currently retained observations and the supplied configuration. It also replaces that date's prior LLM attempt records. It returns `409 report_in_progress` if the existing job is actively processing. Both endpoints require the shared Bearer token; ordinary requests never force a rerun.
 
 The result endpoint returns the versioned report object, including `ai_status`, `data_quality`, and evidence references. The integration is responsible for deciding how to display it, not for reimplementing report semantics.
 

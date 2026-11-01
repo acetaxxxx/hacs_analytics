@@ -185,23 +185,37 @@ class SidecarClient:
             raise SidecarError("connection", "sidecar heartbeat request failed") from err
 
     async def async_request_report(
-        self, report_date: str, model: str = "", use_ai: bool = True
+        self,
+        report_date: str,
+        model: str = "",
+        use_ai: bool = True,
+        force: bool = False,
     ) -> dict[str, Any]:
-        """Create or reuse the idempotent sidecar report job."""
+        """Create, reuse, or explicitly rerun a sidecar report job."""
         if not self.configured:
             raise SidecarError("not_configured", "sidecar URL is not configured")
-        body: dict[str, Any] = {"report_date": report_date, "use_ai": use_ai}
+        if force:
+            path = f"{REPORTS_PATH}/{report_date}/rerun"
+            body: dict[str, Any] = {"use_ai": use_ai}
+        else:
+            path = REPORTS_PATH
+            body = {"report_date": report_date, "use_ai": use_ai}
         if model:
             body["model"] = model
         try:
             async with self._session.post(
-                f"{self._base_url}{REPORTS_PATH}",
+                f"{self._base_url}{path}",
                 json=body,
                 headers=self._build_headers(),
                 timeout=aiohttp.ClientTimeout(total=self._timeout),
             ) as response:
                 payload = await response.json(content_type=None)
                 if response.status not in (200, 202) or not isinstance(payload, dict):
+                    if response.status == 409 and isinstance(payload, dict):
+                        raise SidecarError(
+                            str(payload.get("code", "conflict")),
+                            str(payload.get("message", "report request conflicts with an active job")),
+                        )
                     raise SidecarError("request_failed", f"sidecar report request returned HTTP {response.status}")
                 return payload
         except SidecarError:

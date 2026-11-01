@@ -37,11 +37,13 @@ from .const import (
     CONF_EXCLUDED_DEVICE_IDS,
     CONF_EXCLUDED_ENTITY_IDS,
     CONF_EXCLUDED_ENTITY_GLOBS,
+    CONF_IMMEDIATE_ALERT_EXCLUDED_ENTITY_IDS,
     CONF_INCLUDED_DEVICE_IDS,
     CONF_INCLUDED_DOMAINS,
     CONF_INCLUDED_ENTITY_IDS,
     CONF_MAX_DAYS,
     CONF_NOTIFY_SERVICE,
+    CONF_NOTIFY_TARGET_ENTITY_IDS,
     CONF_PROFILE_OVERRIDES,
     CONF_REPORT_TIME,
     DEFAULT_ENABLE_AI_SUMMARY,
@@ -324,6 +326,7 @@ class HomeDailyReportManager:
         report_date: str | None = None,
         use_ai: bool = True,
         notify: bool = True,
+        force: bool = False,
     ) -> dict[str, Any]:
         """Generate a daily report through the external Gemini sidecar."""
         target_date = report_date or self._default_report_date()
@@ -336,6 +339,7 @@ class HomeDailyReportManager:
                 target_date,
                 notify,
                 use_ai and self._option(CONF_ENABLE_AI_SUMMARY, DEFAULT_ENABLE_AI_SUMMARY),
+                force,
             )
         report = self._build_report(target_date)
 
@@ -353,14 +357,26 @@ class HomeDailyReportManager:
         return report
 
     async def _async_generate_sidecar_report(
-        self, target_date: str, notify: bool, use_ai: bool = True
+        self, target_date: str, notify: bool, use_ai: bool = True, force: bool = False
     ) -> dict[str, Any]:
-        """Request and bounded-poll one idempotent sidecar report."""
+        """Request and bounded-poll a sidecar report, optionally rerunning it."""
         assert self._sidecar_client is not None
         model = str(self._option(CONF_GEMINI_MODEL, "gemini-2.5-flash"))
         try:
-            await self._sidecar_client.async_request_report(target_date, model, use_ai)
+            await self._sidecar_client.async_request_report(
+                target_date, model, use_ai, force=force
+            )
         except SidecarError as err:
+            if err.code == "report_in_progress":
+                _LOGGER.warning(
+                    "Cannot rerun report %s because it is already processing",
+                    target_date,
+                )
+                return {
+                    "report_date": target_date,
+                    "status": "report_in_progress",
+                    "error_code": err.code,
+                }
             self._set_sidecar_status("degraded", err.code)
             return {
                 "report_date": target_date,
@@ -818,6 +834,21 @@ class HomeDailyReportManager:
             return
 
         domain, service = service_name.split(".", 1)
+        target = None
+        target_entity_ids = self._option(CONF_NOTIFY_TARGET_ENTITY_IDS, [])
+        if (
+            domain == "notify"
+            and service != "send_message"
+            and not self.hass.services.has_service(domain, service)
+            and self.hass.states.get(service_name) is not None
+        ):
+            # Modern Home Assistant notify destinations are entities. Call
+            # the shared action with the configured entity as its target.
+            service = "send_message"
+            target = {"entity_id": [service_name]}
+        elif domain == "notify" and service == "send_message" and target_entity_ids:
+            target = {"entity_id": target_entity_ids}
+
         message = self._notification_message(report)
         report_date = report.get("date", report.get("report_date", self._today()))
         chunks = _split_message(message)
@@ -826,6 +857,8 @@ class HomeDailyReportManager:
                 "title": "Home Daily Report",
                 "message": chunk,
             }
+            if domain == "telegram_bot" and service == "send_message" and target_entity_ids:
+                service_data["entity_id"] = target_entity_ids
             if service_name == DEFAULT_NOTIFY_SERVICE:
                 suffix = f"_{index}" if len(chunks) > 1 else ""
                 service_data["notification_id"] = f"{DOMAIN}_{report_date}{suffix}"
@@ -836,12 +869,19 @@ class HomeDailyReportManager:
                     service,
                     service_data,
                     blocking=False,
+                    target=target,
                 )
             except Exception as err:  # noqa: BLE001
                 _LOGGER.warning("Failed to send report notification: %s", err)
 
     def _schedule_immediate_risk(self, state: State) -> None:
-        """Notify Telegram about a high-risk state with a local cooldown."""
+        """Notify through the configured HA destination with a local cooldown."""
+        excluded_entities = self._option(
+            CONF_IMMEDIATE_ALERT_EXCLUDED_ENTITY_IDS, []
+        )
+        if state.entity_id in excluded_entities:
+            return
+
         device_class = str(state.attributes.get(ATTR_DEVICE_CLASS, "")).lower()
         state_value = state.state.lower()
         if device_class not in {"smoke", "gas", "moisture", "leak", "door", "window", "lock", "safety"}:
