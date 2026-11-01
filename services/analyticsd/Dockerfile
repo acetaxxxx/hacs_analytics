@@ -8,7 +8,9 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/analyticsd ./cmd/a
 
 FROM alpine:3.22
 
-RUN addgroup -S homekeeper && adduser -S -G homekeeper homekeeper
+RUN apk add --no-cache tzdata \
+    && addgroup -S homekeeper \
+    && adduser -S -G homekeeper homekeeper
 WORKDIR /app
 COPY --from=build /out/analyticsd /app/analyticsd
 RUN mkdir -p /data && chown -R homekeeper:homekeeper /data /app
